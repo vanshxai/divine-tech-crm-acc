@@ -336,6 +336,9 @@ poll();setInterval(poll,3000)
 const L=document.getElementById('lang');function setL(on){document.documentElement.classList.toggle('nogu',!on);L.textContent=on?'🌐 ગુજરાતી ✓':'🌐 Gujarati off'}
 let on=true;try{on=localStorage.getItem('gu')!='off'}catch(e){}setL(on);
 L.onclick=e=>{e.preventDefault();on=!on;try{localStorage.setItem('gu',on?'on':'off')}catch(e){}setL(on)}</script><script src="/static/chat.js?v=1"></script>"""
+CHAT_ON = os.environ.get("CHAT_PANEL") == "on"        # the command chat panel is switched off for now; put CHAT_PANEL=on in .env to bring it back
+if not CHAT_ON: TAIL = re.sub(r"<button id=chatbtn.*?(?=<div id=toast)", "", TAIL, flags=re.S).replace('<script src="/static/chat.js?v=1"></script>', "")
+
 def gu_html(h):
     """Add the Gujarati line under every known English label (outside scripts and styles)."""
     def add(m):
@@ -892,7 +895,8 @@ def login():
 def logout():
     session.clear(); return redirect("/login")
 
-import chatcmd; chatcmd.register(app, globals())
+if CHAT_ON:
+    import chatcmd; chatcmd.register(app, globals())
 
 if __name__ == "__main__":
     app.run(port=5050, debug=True)
