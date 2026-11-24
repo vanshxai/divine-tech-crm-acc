@@ -1,0 +1,66 @@
+# Gujarati wording for Divine Books. Left = English exactly as on screen, right = Gujarati shown beneath it.
+# To change a word, edit the right side and save. The page updates by itself.
+GU = {
+    # menu
+    "Home": "હોમ", "Masters": "મૂળ માહિતી", "Transactions": "વ્યવહારો", "Reports": "રિપોર્ટ", "CRM": "ગ્રાહક સંભાળ",
+    "Parties": "પાર્ટી (ગ્રાહક / સપ્લાયર)", "Items": "માલ / વસ્તુઓ", "Sales": "વેચાણ", "Purchase": "ખરીદી",
+    "Receipt": "પૈસા મળ્યા", "Payment": "પૈસા આપ્યા", "Drafts": "તપાસવાના બિલ", "Outstanding": "બાકી રકમ", "Books": "હિસાબ", "Jobs": "કામ",
+    # pages and headings
+    "Sales voucher": "વેચાણ બિલ", "Purchase voucher": "ખરીદી બિલ", "Trial balance": "તાળો (ટ્રાયલ બેલેન્સ)", "Latest entries": "છેલ્લી એન્ટ્રી",
+    "Follow up today": "આજે ફોલો-અપ", "Unpaid sales bills": "બાકી વેચાણ બિલ", "Bills": "બિલ", "Add party": "નવી પાર્ટી ઉમેરો",
+    "Add item": "નવી વસ્તુ ઉમેરો", "Add job": "નવું કામ ઉમેરો", "GST summary": "GST સારાંશ", "Bill sundry": "બિલની વિગત",
+    "Money received from a customer": "ગ્રાહક પાસેથી મળેલા પૈસા", "Money paid to a supplier": "સપ્લાયરને ચૂકવેલા પૈસા",
+    "Bill to": "બિલ મેળવનાર", "Tax invoice": "ટેક્સ ઇન્વોઇસ", "Purchase bill": "ખરીદી બિલ",
+    "Customers owe us": "ગ્રાહકો પાસે લેવાના", "We owe suppliers": "સપ્લાયરને આપવાના", "Sales this month": "આ મહિનાનું વેચાણ",
+    "Purchases this month": "આ મહિનાની ખરીદી", "Owes us": "અમને આપવાના", "We owe": "અમારે આપવાના",
+    # buttons
+    "+ Sales bill": "+ વેચાણ બિલ", "+ Purchase bill": "+ ખરીદી બિલ", "+ New sales bill": "+ નવું વેચાણ બિલ", "+ New purchase bill": "+ નવું ખરીદી બિલ",
+    "Save party": "પાર્ટી સાચવો", "Save item": "વસ્તુ સાચવો", "Save job": "કામ સાચવો", "Save sales bill": "વેચાણ બિલ સાચવો",
+    "✓ Verify & save": "✓ તપાસીને સાચવો", "Save": "સાચવો", "Print": "પ્રિન્ટ", "Cancel bill": "બિલ રદ કરો", "Undo": "પાછું ખેંચો",
+    "Record receipt": "પૈસા મળ્યા નોંધો", "Pay supplier": "સપ્લાયરને ચૂકવો", "Check": "તપાસો", "Remove": "કાઢી નાખો",
+    "+ Add sample draft": "+ નમૂનાનું બિલ ઉમેરો",
+    # form labels and table headings
+    "Name": "નામ", "Type": "પ્રકાર", "Phone": "ફોન", "GSTIN": "GST નંબર", "State": "રાજ્ય", "Address": "સરનામું", "Series": "શ્રેણી",
+    "Voucher no.": "બિલ નંબર", "Date": "તારીખ", "Customer": "ગ્રાહક", "Supplier": "સપ્લાયર", "Job (optional)": "કામ (જરૂર હોય તો)",
+    "Narration": "નોંધ", "Supplier's bill no.": "સપ્લાયરનું બિલ નંબર", "Supplier's bill date": "સપ્લાયરના બિલની તારીખ", "Unit": "એકમ",
+    "HSN / SAC": "HSN / SAC", "Sale price ₹": "વેચાણ ભાવ ₹", "Purchase price ₹": "ખરીદ ભાવ ₹", "Opening stock": "શરૂઆતનો સ્ટોક",
+    "Client": "ગ્રાહક", "Work": "કામ", "Follow up on": "ફોલો-અપ તારીખ", "Bill": "બિલ", "Amount ₹": "રકમ ₹",
+    "Received by": "કેવી રીતે મળ્યા", "Paid by": "કેવી રીતે ચૂકવ્યા", "They owe us": "અમને આપવાના", "We owe them": "અમારે આપવાના",
+    "Sale ₹": "વેચાણ ₹", "Purchase ₹": "ખરીદી ₹", "In stock": "સ્ટોકમાં", "Follow up": "ફોલો-અપ", "Status": "સ્થિતિ", "Number": "નંબર",
+    "Total": "કુલ", "Due": "બાકી", "To pay": "ચૂકવવાના", "Supplier bill": "સપ્લાયર બિલ", "Item": "વસ્તુ", "Qty": "જથ્થો", "Rate": "ભાવ",
+    "Rate ₹": "ભાવ ₹", "Amount": "રકમ", "Account": "ખાતું", "Debit ₹": "ઉધાર ₹", "Credit ₹": "જમા ₹", "Debit": "ઉધાર", "Credit": "જમા",
+    "Entry": "એન્ટ્રી", "Received": "મળ્યું", "Bill no.": "બિલ નંબર", "Taxable": "કરપાત્ર રકમ", "Taxable value": "કરપાત્ર રકમ",
+    "Round off": "રાઉન્ડ ઓફ",
+    # choices and status words
+    "Both": "બંને", "Cash": "રોકડા", "Bank": "બેંક", "None": "કોઈ નહીં", "Choose…": "પસંદ કરો…",
+    "enquiry": "પૂછપરછ", "quoted": "ભાવ આપ્યો", "active": "ચાલુ", "done": "પૂર્ણ", "invoiced": "બિલ બન્યું",
+    "Paid": "ચૂકવાયું", "Part": "થોડું ચૂકવાયું", "Cancelled": "રદ", "new": "નવું", "dismissed": "કાઢી નાખ્યું",
+    # sentences
+    "Nothing to follow up.": "ફોલો-અપ માટે કંઈ નથી.", "All paid.": "બધા ચૂકવાઈ ગયા.", "Nothing pending.": "કંઈ બાકી નથી.",
+    "No unpaid bills.": "કોઈ બાકી બિલ નથી.", "No sales bills yet.": "હજી કોઈ વેચાણ બિલ નથી.", "No purchase bills yet.": "હજી કોઈ ખરીદી બિલ નથી.",
+    "No jobs yet.": "હજી કોઈ કામ નથી.", "No jobs.": "કોઈ કામ નથી.", "No bills.": "કોઈ બિલ નથી.", "No entries yet.": "હજી કોઈ એન્ટ્રી નથી.",
+    "No items yet. Add the first one below.": "હજી કોઈ વસ્તુ નથી. નીચે પહેલી ઉમેરો.",
+    "No parties yet. Add the first one below.": "હજી કોઈ પાર્ટી નથી. નીચે પહેલી ઉમેરો.",
+    "No drafts waiting.": "તપાસવા માટે કોઈ બિલ બાકી નથી.", "No payments yet.": "હજી કોઈ ચુકવણી નથી.", "No receipts yet.": "હજી કોઈ પૈસા મળ્યા નથી.",
+    "Bills read from photos appear here by themselves. Open one, check it against the paper, and save. Nothing reaches the books until you save.":
+        "ફોટા પરથી વાંચેલા બિલ અહીં આપમેળે આવે છે. એક ખોલો, કાગળ સાથે મેળવો અને સાચવો. તમે સાચવો નહીં ત્યાં સુધી હિસાબમાં કંઈ ચડતું નથી.",
+    "Go back and fix it, then try again.": "પાછા જાઓ, સુધારો અને ફરી પ્રયત્ન કરો.",
+    # error messages (shown on the warning screen)
+    "Name is needed": "નામ લખવું જરૂરી છે.", "GSTIN is not valid. Check every letter and digit.": "GST નંબર સાચો નથી. દરેક અક્ષર અને આંકડો તપાસો.",
+    "Add at least one item": "ઓછામાં ઓછી એક વસ્તુ ઉમેરો.", "Check item, quantity, rate and GST": "વસ્તુ, જથ્થો, ભાવ અને GST તપાસો.",
+    "Supplier's bill number is needed": "સપ્લાયરનું બિલ નંબર લખવો જરૂરી છે.", "This supplier bill is already entered": "આ સપ્લાયર બિલ પહેલેથી નોંધાયેલું છે.",
+    "Amount must be above 0 and not more than the due": "રકમ 0 થી વધારે અને બાકી રકમથી વધારે ન હોવી જોઈએ.",
+    "Already cancelled": "આ બિલ પહેલેથી રદ થયેલું છે.", "Already undone": "આ પહેલેથી પાછું ખેંચાયેલું છે.",
+    "Undo its receipts first": "પહેલાં તેના પૈસા મળ્યાની નોંધ પાછી ખેંચો.", "Undo its payments first": "પહેલાં તેની ચુકવણી પાછી ખેંચો.",
+    "This draft is already used or removed": "આ બિલ પહેલેથી વપરાઈ ગયું છે અથવા કાઢી નાખ્યું છે.", "Entry does not balance": "એન્ટ્રીનો તાળો મળતો નથી.",
+    "Item name is needed": "વસ્તુનું નામ લખવું જરૂરી છે.", "An item with this name already exists": "આ નામની વસ્તુ પહેલેથી છે.",
+    "Check GST, prices and opening stock": "GST, ભાવ અને શરૂઆતનો સ્ટોક તપાસો.",
+    # added later
+    "Inbox": "ઇનબોક્સ (મળેલી ફાઇલો)", "Connect Telegram": "ટેલિગ્રામ જોડો", "From": "કોની પાસેથી", "File": "ફાઇલ", "Note": "નોંધ", "Mark done": "પૂર્ણ કર્યું",
+    "Nothing received yet.": "હજી કંઈ મળ્યું નથી.", "Edit": "સુધારો", "Edit item": "વસ્તુ સુધારો", "Edit party": "પાર્ટી સુધારો", "Cancel": "રદ કરો",
+    "Search": "શોધો", "Clear": "સાફ કરો", "← Previous": "← પાછળ", "Next →": "આગળ →", "+ Add row": "+ લીટી ઉમેરો",
+    "Password": "પાસવર્ડ", "Log in": "પ્રવેશ કરો", "Log out": "લૉગ આઉટ", "Wrong password": "પાસવર્ડ ખોટો છે", "⬇ Backup": "⬇ બેકઅપ ડાઉનલોડ",
+    "Customer": "ગ્રાહક", "customer": "ગ્રાહક", "supplier": "સપ્લાયર", "both": "બંને", "text": "લખાણ",
+    "Changing a price or name only affects new bills. Old bills stay as they were.": "ભાવ કે નામ બદલવાથી ફક્ત નવા બિલ પર અસર થશે. જૂના બિલ જેમ હતા તેમ રહેશે.",
+    "Changes apply to new bills. Old bills keep the amounts and taxes they were made with.": "ફેરફાર નવા બિલ પર લાગુ પડશે. જૂના બિલમાં રકમ અને ટેક્સ જેમ હતા તેમ રહેશે.",
+}
