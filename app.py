@@ -3,6 +3,8 @@ from pathlib import Path
 from decimal import Decimal as D, ROUND_HALF_UP
 from flask import Flask, Request, request, redirect, render_template_string as R, g, session, Response, send_from_directory, abort
 from gujarati import GU
+from werkzeug.utils import secure_filename
+import intake, quick
 
 OWN_STATE, OWN_CODE, PREFIX = "Gujarat", "24", "DT"   # same state -> CGST+SGST, else IGST
 DB = Path(__file__).with_name("books.db")
@@ -15,7 +17,7 @@ class Req(Request): max_form_parts, max_form_memory_size = 500_000, 100_000_000 
 
 app = Flask(__name__); app.request_class = Req
 app.secret_key = os.environ.get("SECRET_KEY") or os.urandom(24)
-app.config.update(SESSION_COOKIE_SAMESITE="Lax", SESSION_COOKIE_SECURE=bool(os.environ.get("HTTPS")))
+app.config.update(SESSION_COOKIE_SAMESITE="Lax", SESSION_COOKIE_SECURE=bool(os.environ.get("HTTPS")), MAX_CONTENT_LENGTH=40 * 1024 * 1024)
 
 SCHEMA = """
 create table if not exists clients(id integer primary key, name text not null, phone, gstin, state, address, kind text default 'customer');
@@ -260,7 +262,7 @@ h1 .gu{font-size:.52em;margin-top:2px}.btn .gu,button .gu,.pill .gu{display:inli
 <div><label>E-way bill no.</label><input name=eway value="{{m.eway or ''}}"></div><div><label>Challan no.</label><input name=challan value="{{m.challan or ''}}"></div>
 <div><label>P.O. / order no.</label><input name=po value="{{m.po or ''}}"></div><div><label>Due date</label><input name=due type=date value="{{due or ''}}"></div>
 <div style="grid-column:1/-1"><label>Ship to (delivery address)</label><input name=shipto value="{{m.shipto or ''}}"></div></div></details>{% endmacro %}
-{% macro grid(rows, names, imap, mode, fl) %}<datalist id=itemlist>{% for n in names %}<option value="{{n}}">{% endfor %}</datalist>
+{% macro grid(rows, names, imap, mode, fl, pr) %}<datalist id=itemlist>{% for n in names %}<option value="{{n}}">{% endfor %}</datalist>
 <table id=lines><thead><tr><th>Item<th style=width:105px>HSN<th style=width:66px>Qty<th style=width:74px>Unit<th style=width:100px>Rate ₹<th style=width:66px>Disc %<th style=width:58px>GST %<th class=r style=width:100px>Amount<th style=width:40px></tr></thead><tbody>
 {% for r in rows %}{% set c = 'fl' if fl and r.descr else '' %}{% set dl = ([loop.index, 12]|min) * 0.15 %}<tr><td><input name=d value="{{r.descr}}" list=itemlist autocomplete=off class="{{c}}" style="animation-delay:{{dl}}s">
 <td><input name=h value="{{r.hsn}}" class="{{c}}" style="animation-delay:{{dl+0.05}}s"><td><input name=q value="{{r.qty or 1}}" class="{{c}}" style="animation-delay:{{dl+0.1}}s">
@@ -271,10 +273,10 @@ h1 .gu{font-size:.52em;margin-top:2px}.btn .gu,button .gu,.pill .gu{display:inli
 <div class=vfoot><div class=card><h2>GST summary</h2><table><thead><tr><th>Rate<th class=r>Taxable<th class=r>CGST<th class=r>SGST<th class=r>IGST</tr></thead><tbody id=gs></tbody></table></div>
 <div class=card><h2>Bill sundry</h2><table><tbody id=sundry></tbody></table><div class=bigtot id=grand>₹0.00</div></div></div>
 {% if mode=='buy' %}<div class=card><h2>As printed on the supplier's bill</h2><p class=mute style="margin-top:-6px">Filled from the items. If the paper bill shows different figures, type the paper's figures here.</p>
-<div class=form><div><label>Taxable ₹</label><input id=pr_t name=pr_t type=number step=0.01></div><div><label>CGST ₹</label><input id=pr_c name=pr_c type=number step=0.01></div>
-<div><label>SGST ₹</label><input id=pr_s name=pr_s type=number step=0.01></div><div><label>IGST ₹</label><input id=pr_i name=pr_i type=number step=0.01></div>
-<div><label>Round off ₹</label><input id=pr_r name=pr_r type=number step=0.01></div><div><label>Total ₹</label><input id=pr_g name=pr_g type=number step=0.01></div></div>
-<input type=hidden name=touched id=touched value=""><p id=diffwarn class=note style="display:none;margin-top:14px"></p>
+<div class=form><div><label>Taxable ₹</label><input id=pr_t name=pr_t type=number step=0.01 value="{{pr.t}}"></div><div><label>CGST ₹</label><input id=pr_c name=pr_c type=number step=0.01 value="{{pr.c}}"></div>
+<div><label>SGST ₹</label><input id=pr_s name=pr_s type=number step=0.01 value="{{pr.s}}"></div><div><label>IGST ₹</label><input id=pr_i name=pr_i type=number step=0.01 value="{{pr.i}}"></div>
+<div><label>Round off ₹</label><input id=pr_r name=pr_r type=number step=0.01 value="{{pr.r}}"></div><div><label>Total ₹</label><input id=pr_g name=pr_g type=number step=0.01 value="{{pr.g}}"></div></div>
+<input type=hidden name=touched id=touched value="{{1 if pr.t else ''}}"><p id=diffwarn class=note style="display:none;margin-top:14px"></p>
 <label id=ackrow style="display:none;margin-top:10px"><input type=checkbox name=ack value=1 style="width:auto;height:auto;display:inline"> The supplier's figures are right</label></div>{% endif %}
 <script>
 const ITEMS={{imap|tojson}},MODE="{{mode}}",P=document.getElementById('party'),body=document.querySelector('#lines tbody'),INC=document.getElementById('incl');
@@ -465,7 +467,7 @@ def invoices():
     qs = request.args.get("q", "").strip(); p = max(int(request.args.get("p", 1)), 1); like = f"%{qs}%"
     rows = q("select * from inv_due where no like ? or name like ? order by date desc, id desc limit ? offset ?", like, like, PER + 1, (p - 1) * PER)
     more, rows = len(rows) > PER, rows[:PER]
-    return page("""<div class=head><h1>Sales</h1><a class=btn href=/invoice/new>+ New sales bill</a></div>{{bar(qs)}}<div class=card><table><thead><tr><th>Number<th>Date<th>Customer<th class=r>Total<th class=r>Due<th>Status</tr></thead><tbody>
+    return page("""<div class=head><h1>Sales</h1><div><a class="btn ghost" href=/quick>⚡ Quick bill</a> <a class=btn href=/invoice/new>+ New sales bill</a></div></div>{{bar(qs)}}<div class=card><table><thead><tr><th>Number<th>Date<th>Customer<th class=r>Total<th class=r>Due<th>Status</tr></thead><tbody>
 {% for d in rows %}<tr><td><a href=/invoice/{{d.id}}><b>{{d.no}}</b></a><td class=mute>{{d.date}}<td>{{d.name}}<td class=r>₹{{d.total|rs}}<td class=r>{{(0 if d.cancelled else d.due)|rs}}<td><span class="pill {{st(d)}}">{{st(d)}}</span></tr>
 {% else %}<tr><td class=empty colspan=6>No sales bills yet.</tr>{% endfor %}</tbody></table></div>{{pager(p, more, qs)}}""", rows=rows, st=bill_state, qs=qs, p=p, more=more)
 
@@ -475,15 +477,22 @@ def invoice_new():
         rows, imap = item_data(); warn = ""
         try: vn = inv_no(today()); need_company()
         except Oops as e: vn, warn = "—", str(e)
+        pre = {}
+        if dd := request.args.get("draft"):
+            dr = one("select * from drafts where id=? and status='new'", dd)
+            if not dr: raise Oops("This draft is already used or removed")
+            pre = json.loads(dr["data"])
+        srows = pre.get("lines") or []; srows = srows + [{}] * max(6 - len(srows), 1)
         return page("""<div class=head><h1>Sales voucher</h1></div>{% if warn %}<div class=note>⚠ {{warn}}. <a href=/company><b>Open Company details</b></a></div>{% endif %}
-<form method=post class=v><div class=card><div class=form>
+{% if pre.customer is defined %}<div class=note>⚡ Draft from your command. Check it, then save.</div>{% for w in pre.warnings or [] %}<div class=note>⚠ {{w}}</div>{% endfor %}{% endif %}
+<form method=post class=v><input type=hidden name=draft value="{{request.args.get('draft','')}}"><div class=card><div class=form>
 <div><label>Series</label><div class=ro>Main</div></div><div><label>Voucher no.</label><div class=ro>{{vn}}</div></div><div><label>Date</label><input name=date type=date value={{d}}></div>
 <div><label>Customer</label><select name=client id=party required><option value="">Choose…</option>{% for c in cs %}<option value={{c.id}} data-intra={{c.intra}} data-bal={{c.bal}} data-gstin="{{c.gstin}}" {{'selected' if c.id|string==sel}}>{{c.name}}</option>{% endfor %}</select></div>
 <div><label>Job (optional)</label><select name=job><option value="">None</option>{% for j in js %}<option value={{j.id}}>{{j.name}}: {{j.title}}</option>{% endfor %}</select></div>
 <div><label>Rates are</label><select name=incl id=incl><option value=0>Without tax<option value=1>Including tax</select></div>
-<div><label>Narration</label><input name=narration></div></div><p class=pinfo id=pinfo></p></div>
-{{extras({}, '')}}<div class=card>{{grid([{}] * 6, names, items, 'sale', false)}}<button>Save sales bill</button></form>""",
-            cs=parties("'customer','both'", "Debtors", "dr", "cr"), sel=request.args.get("client", ""), d=today(), vn=vn, warn=warn, names=[r["name"] for r in rows], items=imap,
+<div><label>Narration</label><input name=narration value="{{pre.narration or ''}}"></div></div><p class=pinfo id=pinfo></p></div>
+{{extras({}, '')}}<div class=card>{{grid(srows, names, items, 'sale', pre.customer, {})}}<button>Save sales bill</button></form>""",
+            cs=parties("'customer','both'", "Debtors", "dr", "cr"), sel=str(pre.get("party") or request.args.get("client", "")), pre=pre, srows=srows, d=today(), vn=vn, warn=warn, names=[r["name"] for r in rows], items=imap,
             js=q("select j.*, c.name from jobs j join clients c on c.id=j.client_id where status!='invoiced'"))
     f = request.form; need_company(); lines = parse(f); incl = f.get("incl") == "1"
     cl = one("select * from clients where id=?", f["client"])
@@ -498,6 +507,7 @@ def invoice_new():
         c.executemany("insert into lines(invoice_id,descr,qty,rate,gst,hsn,unit,item_id,disc,taxable,taxamt) values(?,?,?,?,?,?,?,?,?,?,?)",
                       [(i, d, qy, r, gs, h, u, iid(d), dc, t, x) for (d, qy, r, gs, h, u, dc), (t, x) in zip(lines, rows)])
         if f["job"]: c.execute("update jobs set status='invoiced' where id=?", (f["job"],))
+        if f.get("draft"): c.execute("update drafts set status='done' where id=?", (f["draft"],))
     return redirect(f"/invoice/{i}")
 
 def doc_lines(rows): return [(l["descr"], l["hsn"], l["qty"], l["unit"], l["rate"], l["disc"], l["gst"], l["taxable"] if l["taxable"] is not None else paise(D(l["qty"]) * D(l["rate"]))) for l in rows]
@@ -580,11 +590,15 @@ def purchase_new():
             m = one("select id from clients where (gstin!='' and gstin=?) or lower(name)=lower(?)", (pre.get("gstin") or "").upper(), pre.get("supplier") or "")
             pre["party"] = m["id"] if m else ""; miss = None if m else pre
         else: pre["party"] = request.args.get("party", "")
+        src = pre.get("inbox_id"); sr = one("select path from inbox where id=?", src) if src else None
+        src_pdf = bool(sr and (sr[0] or "").lower().endswith(".pdf"))
         rows = pre.get("lines") or []; rows = rows + [{}] * max(6 - len(rows), 1)
         irows, imap = item_data()
         return page("""<div class=head><h1>Purchase voucher</h1></div>
 {% if miss %}<div class=note>📷 Read from photo. Supplier <b>{{miss.supplier}}</b> {{miss.gstin}} is not in Parties. <a href="/clients?name={{(miss.supplier or '')|urlencode}}&gstin={{(miss.gstin or '')|urlencode}}&kind=supplier"><b>Add this supplier first</b></a>, then reopen this draft.</div>
-{% elif pre.supplier %}<div class=note>📷 Read from photo. Check every box against the paper bill, then save.</div>{% endif %}
+{% elif pre.supplier %}<div class=note>📷 Read from the bill. Check every box against the original below, then save.</div>{% endif %}
+{% for w in pre.warnings or [] %}<div class=note>⚠ {{w}}</div>{% endfor %}
+{% if src %}<div class=card style="padding:0;overflow:hidden"><div class=mute style="padding:10px 16px">Original bill</div>{% if src_pdf %}<iframe src="/inbox/file/{{src}}" style="width:100%;height:560px;border:0"></iframe>{% else %}<img src="/inbox/file/{{src}}" style="width:100%;display:block">{% endif %}</div>{% endif %}
 <form method=post class=v><input type=hidden name=draft value="{{request.args.get('draft','')}}"><div class=card><div class=form>
 <div><label>Series</label><div class=ro>Main</div></div><div><label>Voucher no.</label><div class=ro>{{vn}}</div></div><div><label>Date</label><input name=date type=date value={{d}}></div>
 <div><label>Supplier</label><select name=party id=party required><option value="">Choose…</option>{% for c in cs %}<option value={{c.id}} data-intra={{c.intra}} data-bal={{c.bal}} data-gstin="{{c.gstin}}" {{'selected' if c.id|string==pre.party|string}}>{{c.name}}</option>{% endfor %}</select></div>
@@ -594,8 +608,8 @@ def purchase_new():
 <div><label>Rates are</label><select name=incl id=incl><option value=0>Without tax<option value=1 {{'selected' if pre.incl}}>Including tax</select></div>
 <div><label>Job (optional)</label><select name=job><option value="">None</option>{% for j in js %}<option value={{j.id}}>{{j.name}}: {{j.title}}</option>{% endfor %}</select></div>
 <div><label>Narration</label><input name=narration></div></div><p class=pinfo id=pinfo></p></div>
-{{extras(pre.meta or {}, '')}}<div class=card>{{grid(rows, names, items, 'buy', pre.supplier)}}<button>✓ Verify & save</button></form>""",
-            cs=parties("'supplier','both'", "Creditors", "cr", "dr"), pre=pre, miss=miss, rows=rows, d=today(), vn=vno("PU", "purchases", today()), names=[r["name"] for r in irows], items=imap,
+{{extras(pre.meta or {}, '')}}<div class=card>{{grid(rows, names, items, 'buy', pre.supplier, pre.printed or {})}}<button>✓ Verify & save</button></form>""",
+            cs=parties("'supplier','both'", "Creditors", "cr", "dr"), pre=pre, miss=miss, rows=rows, d=today(), vn=vno("PU", "purchases", today()), names=[r["name"] for r in irows], items=imap, src=src, src_pdf=src_pdf,
             js=q("select j.*, c.name from jobs j join clients c on c.id=j.client_id order by j.id desc limit 200"))
     f = request.form; lines = parse(f); incl = f.get("incl") == "1"; proforma = f.get("doctype") == "proforma"
     p = one("select * from clients where id=?", f["party"]); sup_no = f["sup_no"].strip()
@@ -620,11 +634,12 @@ def purchase(i):
     ls = doc_lines(q("select descr,hsn,qty,unit,rate,disc,gst,taxable from plines where purchase_id=?", i))
     pays = q("select * from ppayments where purchase_id=? order by id", i); paid = sum(p["amount"] for p in pays if not p["cancelled"])
     job = one("select title from jobs where id=?", v["job_id"]) if v["job_id"] else None
+    dr = one("select data from drafts where id=?", v["draft_id"]) if v["draft_id"] else None; src = json.loads(dr[0]).get("inbox_id") if dr else None
     return page("""<div class="head np"><h1>{{v.no}} {% if v.cancelled %}<span class="pill Cancelled">Cancelled</span>{% elif v.doctype=='proforma' %}<span class="pill Proforma">Proforma</span>{% elif v.total-paid<=0 %}<span class="pill Paid">Paid</span>{% endif %}</h1><div>
 {% if not v.cancelled and v.doctype!='proforma' %}<a class=btn href="/payment?purchase={{v.id}}">Pay supplier</a> {% elif not v.cancelled %}<a class=btn href="/purchase/{{v.id}}/post">Post to books</a> {% endif %}<button class=ghost onclick=print()>Print</button></div></div>
 {% if v.doctype=='proforma' %}<div class=note>This is a proforma. It is not in your books or stock yet. When the real tax invoice arrives, press <b>Post to books</b>.</div>{% endif %}
 <div class=card><div style="display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:20px"><div><h2>Supplier</h2><b>{{v.name}}</b><br><span class=mute>{{v.gstin}}<br>{{v.address}}</span></div>
-<div class=r><h2>Purchase bill</h2><b>{{v.no}}</b><br><span class=mute>{{v.date}}<br>Supplier bill {{v.sup_no}} · {{v.sup_date}}{% if v.due %}<br>Due {{v.due}}{% endif %}{% if job %}<br>Job: {{job.title}}{% endif %}</span></div></div>
+<div class=r><h2>Purchase bill</h2><b>{{v.no}}</b><br><span class=mute>{{v.date}}<br>Supplier bill {{v.sup_no}} · {{v.sup_date}}{% if v.due %}<br>Due {{v.due}}{% endif %}{% if job %}<br>Job: {{job.title}}{% endif %}{% if src %}<br><a href=/inbox/file/{{src}} target=_blank>View original bill</a>{% endif %}</span></div></div>
 <table><thead><tr><th>Item<th>HSN<th class=r>Qty<th class=r>Rate{{' (incl. tax)' if v.incl}}<th class=r>Disc %<th class=r>GST %<th class=r>Amount</tr></thead><tbody>
 {% for d,h,qy,u,r,dc,gs,a in ls %}<tr><td>{{d}}<td class=mute>{{h or ''}}<td class=r>{{qy}} {{u or ''}}<td class=r>{{r}}<td class=r>{{dc or ''}}<td class=r>{{gs}}<td class=r>{{a|rs}}</tr>{% endfor %}
 <tr><td colspan=6 class=r>Taxable value<td class=r>{{v.taxable|rs}}</tr>
@@ -636,7 +651,7 @@ def purchase(i):
 <div class="card np"><h2>Payments · To pay ₹{{(0 if v.doctype=='proforma' else v.total-paid)|rs}}</h2>{% for p in pays %}<form method=post action=/payment/{{p.id}}/cancel style="display:flex;gap:12px;align-items:center;justify-content:space-between;padding:6px 0">
 <span>{{p.date}} · {{p.mode}} · ₹{{p.amount|rs}} {% if p.cancelled %}<span class="pill Cancelled">undone</span>{% endif %}</span>{% if not p.cancelled %}<button class="ghost danger">Undo</button>{% endif %}</form>{% else %}<p class=empty>No payments yet.</p>{% endfor %}</div>
 {% if not v.cancelled %}<form class=np method=post action=/purchase/{{v.id}}/cancel onsubmit="return confirm('Cancel this bill? A reversing entry will be posted.')"><button class=danger>Cancel bill</button></form>{% endif %}""",
-        v=v, ls=ls, pays=pays, paid=paid, job=job, meta=json.loads(v["meta"] or "{}"), labels=META)
+        v=v, ls=ls, pays=pays, paid=paid, job=job, src=src, meta=json.loads(v["meta"] or "{}"), labels=META)
 
 @app.route("/purchase/<int:i>/post", methods=["GET", "POST"])
 def purchase_post(i):
@@ -666,9 +681,13 @@ def purchase_cancel(i):
 def drafts():
     rows = [(r, json.loads(r["data"])) for r in q("select * from drafts where status='new' order by id desc")]
     return page("""<div class=head><h1>Drafts</h1><form method=post action=/drafts/sample><button class=ghost>+ Add sample draft</button></form></div>
-<div class=card><p class=mute>Bills read from photos appear here by themselves. Open one, check it against the paper, and save. Nothing reaches the books until you save.</p><table><thead><tr><th>Received<th>Supplier<th>Bill no.<th>Items<th></tr></thead><tbody>
-{% for r,d in rows %}<tr><td class=mute>{{r.created}}<td><b>{{d.supplier}}</b><td>{{d.sup_no}}<td>{{d.lines|length}}<td class=r><a class=btn href="/purchase/new?draft={{r.id}}">Check</a>
-<form method=post action=/draft/{{r.id}}/dismiss style=display:inline><button class="ghost danger">Remove</button></form></tr>{% else %}<tr><td class=empty colspan=5>No drafts waiting.</tr>{% endfor %}</tbody></table></div>""", rows=rows)
+<div class=card><h2>Upload a bill</h2><p class=mute>A PDF or photo of a supplier bill. It is read on this computer, never sent anywhere, and opens as a draft for you to check.</p>
+<form method=post action=/drafts/upload enctype=multipart/form-data class=form><div><input type=file name=f accept=".pdf,.jpg,.jpeg,.png,.webp" required></div><button>Read this bill</button></form>
+<p style="margin-top:14px"><a class="btn ghost" href=/quick>⚡ Quick bill (type a command)</a></p></div>
+<div class=card><p class=mute>Bills from Telegram and uploads wait here. Open one, check it against the paper, and save. Nothing reaches the books until you save.</p><table><thead><tr><th>Received<th>Party<th>Bill no.<th>Items<th><th></tr></thead><tbody>
+{% for r,d in rows %}<tr><td class=mute>{{r.created}}<td><b>{{d.supplier or d.customer or '—'}}</b>{% if d.kind=='sale' %} <span class="pill active">sale</span>{% endif %}<td>{{d.sup_no or ''}}<td>{{d.lines|length}}<td>{% if d.warnings %}<span class="pill Due">⚠ {{d.warnings|length}}</span>{% endif %}
+<td class=r><a class=btn href="{{'/invoice/new' if d.kind=='sale' else '/purchase/new'}}?draft={{r.id}}">Check</a>
+<form method=post action=/draft/{{r.id}}/dismiss style=display:inline><button class="ghost danger">Remove</button></form></tr>{% else %}<tr><td class=empty colspan=6>No drafts waiting.</tr>{% endfor %}</tbody></table></div>""", rows=rows)
 
 def add_draft(data):
     with db() as c: return c.execute("insert into drafts(created,data) values(?,?)", (dt.datetime.now().strftime("%d %b %H:%M"), json.dumps(data))).lastrowid
@@ -691,6 +710,31 @@ def draft_sample():
 def draft_dismiss(i):
     with db() as c: c.execute("update drafts set status='dismissed' where id=? and status='new'", (i,))
     return redirect("/drafts")
+
+@app.post("/drafts/upload")
+def drafts_upload():
+    f = request.files.get("f")
+    if not f or not f.filename: raise Oops("Choose a file first")
+    name = secure_filename(f.filename)
+    if name.rsplit(".", 1)[-1].lower() not in ("pdf", "jpg", "jpeg", "png", "webp"): raise Oops("Only PDF or photo files (jpg, png) can be read")
+    rel = f"{dt.date.today():%Y-%m}/web_{int(time.time())}_{name}"; (UPLOADS / rel).parent.mkdir(parents=True, exist_ok=True); f.save(UPLOADS / rel)
+    with db() as c:
+        row = c.execute("insert into inbox(received,chat_id,msg_id,sender,kind,filename,path,size,caption,uid) values(?,?,?,?,?,?,?,?,?,?)",
+                        (dt.datetime.now().strftime("%d %b %H:%M"), 0, int(time.time() * 1000), "Web upload", "document", name, rel, (UPLOADS / rel).stat().st_size, "", rel)).lastrowid
+        did, res = intake.to_draft(c, UPLOADS / rel, row)
+    if not did: raise Oops(res)
+    return redirect(f"/purchase/new?draft={did}")
+
+@app.route("/quick", methods=["GET", "POST"])
+def quick_bill():
+    if request.method == "POST":
+        res = quick.parse_quick(request.form["text"], intake.parties(db()), intake.items(db()))
+        if not res["lines"]: raise Oops("I could not find any item lines. Write one item per line, like: Camera 4 x 2500")
+        with db() as c: did = intake.add_draft(c, res)
+        return redirect(f"/invoice/new?draft={did}")
+    return page("""<div class=head><h1>Quick bill</h1></div><div class=card><p class=mute>Type the bill in plain words. First line the customer, then one item per line: <b>item qty x rate</b>. The Sales voucher opens filled in, ready to check, save and print.</p>
+<form method=post><textarea name=text rows=8 required placeholder="Bhoomi Patel&#10;2MP Camera 4 x 2500&#10;Labour 1 x 500 gst 12"></textarea><p><button>Create the draft</button></p></form>
+<p class=mute>Items in your Item Master fill HSN, unit and GST by themselves, and supply the price if you leave it out. The same text works in your Telegram bot when it starts with the word <b>bill</b>.</p></div>""")
 
 # ---------- receipt (money in) and payment (money out) ----------
 def money(kind, ptbl, col, ours):

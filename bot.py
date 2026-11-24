@@ -3,6 +3,7 @@ Run:  python3 bot.py        (token comes from .env, never from code)"""
 import os, re, ssl, json, time, sqlite3, secrets, datetime as dt, urllib.request, urllib.parse
 from pathlib import Path
 from app import DB, UPLOADS
+import intake, quick
 try:
     import certifi; CTX = ssl.create_default_context(cafile=certifi.where())     # this Mac's Python ships without root certificates
 except ImportError: CTX = ssl.create_default_context()
@@ -50,6 +51,11 @@ def handle(u, tg, c):
             return tg.say(chat, "✅ Connected. Send bills, photos, PDFs or Excel files here and they will be saved.")
         return tg.say(chat, "✅ You are connected. Send files here." if paired else "Send /start followed by the 6-digit code shown on the Inbox page of Divine Books.")
     if not paired: return tg.say(chat, "Not connected. Send /start and the 6-digit code from the Inbox page.")
+    if re.match(r"(?i)^(bill|invoice)\b", text):                                # "bill Bhoomi Patel; Camera 4 x 2500" makes a sales draft
+        res = quick.parse_quick(text, intake.parties(c), intake.items(c))
+        if not res["lines"]: return tg.say(chat, "I could not read the items. Example:\nbill Bhoomi Patel\nCamera 4 x 2500\nLabour 1 x 500")
+        intake.add_draft(c, res); tot = sum(float(l["qty"]) * float(l["rate"] or 0) * (1 + float(l["gst"] or 0) / 100) for l in res["lines"])
+        return tg.say(chat, f"🧾 Bill draft for {res['customer'] or '(customer not chosen)'}: {len(res['lines'])} items, about ₹{tot:,.2f}. Open Drafts on your computer to check and print." + ("\n⚠ " + "\n⚠ ".join(res["warnings"]) if res["warnings"] else ""))
     a = attachment(m)
     if a and a[3] > LIMIT: return tg.say(chat, "⚠ This file is bigger than 20 MB, which Telegram bots cannot download. Please send a smaller file.")
     if not a and not text: return tg.say(chat, "I can save files, photos and text messages.")
@@ -60,8 +66,14 @@ def handle(u, tg, c):
         data = tg.file(fid); name = re.sub(r"[^\w.\- ]", "_", name)[:120] or "file"
         rel = f"{dt.date.today():%Y-%m}/{mid}_{uid}_{name}"
         (UPLOADS / rel).parent.mkdir(parents=True, exist_ok=True); (UPLOADS / rel).write_bytes(data); size = len(data)
-    c.execute("insert into inbox(received,chat_id,msg_id,sender,kind,filename,path,size,caption,uid) values(?,?,?,?,?,?,?,?,?,?)",
-              (now(), chat, mid, who, kind, name, rel, size, m.get("caption") or text, uid))
+    row = c.execute("insert into inbox(received,chat_id,msg_id,sender,kind,filename,path,size,caption,uid) values(?,?,?,?,?,?,?,?,?,?)",
+                    (now(), chat, mid, who, kind, name, rel, size, m.get("caption") or text, uid)).lastrowid
+    if rel and name.lower().endswith((".pdf", ".jpg", ".jpeg", ".png", ".webp")):         # a bill: read it and put it in Drafts
+        did, res = intake.to_draft(c, UPLOADS / rel, row)
+        if not did: return tg.say(chat, "✅ Saved. " + res)
+        p = res["printed"] or {}
+        return tg.say(chat, f"📄 Read: {res['supplier'] or 'supplier'} · bill {res['sup_no'] or '?'} · ₹{p.get('g') or '?'} · {len(res['lines'])} items."
+                      + (f"\n⚠ {len(res['warnings'])} thing(s) to check." if res["warnings"] else "\n✓ Totals agree.") + "\nIt is on your computer under Drafts. Check it and press Verify & save.")
     pending = c.execute("select count(*) from inbox where status='new'").fetchone()[0]
     tg.say(chat, f"✅ Saved. {pending} item{'s' if pending != 1 else ''} waiting in the Inbox.")
 

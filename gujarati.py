@@ -82,4 +82,11 @@ GU = {
     "The figures on the bill do not add up (taxable + taxes + round-off must equal the total)": "બિલના આંકડાનો સરવાળો મળતો નથી (કરપાત્ર + ટેક્સ + રાઉન્ડ ઓફ = કુલ હોવું જોઈએ).",
     "The tax type does not match the supplier's state (CGST+SGST for same state, IGST for other states)": "ટેક્સનો પ્રકાર સપ્લાયરના રાજ્ય સાથે બંધબેસતો નથી (એ જ રાજ્ય: CGST+SGST, બીજું રાજ્ય: IGST).",
     "The next invoice number must be a whole number, 1 or more": "આગલો બિલ નંબર 1 કે તેથી વધુ પૂરો આંકડો હોવો જોઈએ.",
+    # reading bills and quick bill
+    "Upload a bill": "બિલ અપલોડ કરો", "Read this bill": "આ બિલ વાંચો", "⚡ Quick bill": "⚡ ઝડપી બિલ", "Quick bill": "ઝડપી બિલ", "⚡ Quick bill (type a command)": "⚡ ઝડપી બિલ (લખીને)",
+    "Create the draft": "ડ્રાફ્ટ બનાવો", "Original bill": "મૂળ બિલ", "Party": "પાર્ટી",
+    "A PDF or photo of a supplier bill. It is read on this computer, never sent anywhere, and opens as a draft for you to check.": "સપ્લાયર બિલની PDF કે ફોટો. તે આ કમ્પ્યુટર પર જ વંચાય છે, ક્યાંય મોકલાતી નથી, અને તપાસવા માટે ડ્રાફ્ટ તરીકે ખૂલે છે.",
+    "Bills from Telegram and uploads wait here. Open one, check it against the paper, and save. Nothing reaches the books until you save.": "ટેલિગ્રામ અને અપલોડના બિલ અહીં રાહ જુએ છે. એક ખોલો, કાગળ સાથે મેળવો અને સાચવો. સાચવો નહીં ત્યાં સુધી હિસાબમાં કંઈ ચડતું નથી.",
+    "Choose a file first": "પહેલા ફાઇલ પસંદ કરો.", "Only PDF or photo files (jpg, png) can be read": "ફક્ત PDF કે ફોટો (jpg, png) વાંચી શકાય છે.",
+    "I could not find any item lines. Write one item per line, like: Camera 4 x 2500": "કોઈ વસ્તુની લીટી મળી નથી. દરેક લીટીમાં એક વસ્તુ લખો, જેમ કે: Camera 4 x 2500",
 }
