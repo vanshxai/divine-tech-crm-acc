@@ -89,4 +89,5 @@ GU = {
     "Bills from Telegram and uploads wait here. Open one, check it against the paper, and save. Nothing reaches the books until you save.": "ટેલિગ્રામ અને અપલોડના બિલ અહીં રાહ જુએ છે. એક ખોલો, કાગળ સાથે મેળવો અને સાચવો. સાચવો નહીં ત્યાં સુધી હિસાબમાં કંઈ ચડતું નથી.",
     "Choose a file first": "પહેલા ફાઇલ પસંદ કરો.", "Only PDF or photo files (jpg, png) can be read": "ફક્ત PDF કે ફોટો (jpg, png) વાંચી શકાય છે.",
     "I could not find any item lines. Write one item per line, like: Camera 4 x 2500": "કોઈ વસ્તુની લીટી મળી નથી. દરેક લીટીમાં એક વસ્તુ લખો, જેમ કે: Camera 4 x 2500",
+    "Commands": "કમાન્ડ", "💬 Commands": "💬 કમાન્ડ",
 }

@@ -31,6 +31,7 @@ create table if not exists plines(purchase_id int, descr text, qty text, rate te
 create table if not exists ppayments(id integer primary key, date text, purchase_id int, amount int, mode text, voucher int, cancelled int default 0);
 create table if not exists drafts(id integer primary key, created text, data text, status text default 'new');
 create table if not exists settings(key text primary key, value text);
+create table if not exists chat_pending(token text primary key, action text, created text);
 create table if not exists tg_users(chat_id integer primary key, name text, added text);
 create table if not exists inbox(id integer primary key, received text, chat_id int, msg_id int, sender text, kind text, filename text, path text, size int, caption text, uid text, status text default 'new');
 create unique index if not exists inbox_uq on inbox(chat_id, msg_id, uid);
@@ -243,10 +244,23 @@ label{font-size:13px;font-weight:500;color:var(--mute);display:block;margin-bott
 .vfoot{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:20px;margin-top:20px}.vfoot table td,.vfoot table th{padding:7px 6px}
 .bigtot{font-size:30px;font-weight:700;letter-spacing:-.02em;text-align:right;border-top:2px solid var(--ink);padding-top:10px;margin-top:6px}
 .fl{animation:fl 1.6s ease both}@keyframes fl{from{background:var(--acc-soft);box-shadow:0 0 0 2px var(--acc)}to{background:var(--card);box-shadow:none}}
-#toast{position:fixed;right:20px;bottom:20px;background:var(--card);border:1px solid var(--acc);border-radius:12px;padding:14px 18px;box-shadow:0 8px 30px #0003;z-index:9}
+#toast{position:fixed;right:20px;bottom:84px;background:var(--card);border:1px solid var(--acc);border-radius:12px;padding:14px 18px;box-shadow:0 8px 30px #0003;z-index:9}
 .gu{display:block;font:500 .95em/1.35 'Noto Sans Gujarati',Inter,sans-serif;text-transform:none;letter-spacing:0;opacity:.9}
 h1 .gu{font-size:.52em;margin-top:2px}.btn .gu,button .gu,.pill .gu{display:inline;margin-left:6px}.pill .gu{margin-left:4px}.nogu .gu{display:none!important}textarea{height:auto;min-height:74px;padding:10px 12px;width:100%}
-.pill.Proforma{background:var(--warn-soft);color:var(--warn)}details>summary{list-style:none}details>summary::-webkit-details-marker{display:none}
+.pill.Proforma{background:var(--warn-soft);color:var(--warn)}
+#chatbtn{position:fixed;right:20px;bottom:20px;z-index:15;height:46px;border-radius:23px;box-shadow:0 6px 24px #0004}
+#chat{position:fixed;top:0;right:0;bottom:0;width:390px;max-width:100vw;background:var(--card);border-left:1px solid var(--line);display:flex;flex-direction:column;z-index:20;transform:translateX(105%);transition:transform .18s}
+.chat-open #chat{transform:none}.chat-open #chatbtn{display:none}.chat-open main{margin-right:400px}
+#chat .top{display:flex;justify-content:space-between;align-items:center;padding:14px 16px;border-bottom:1px solid var(--line)}
+#clog{flex:1;overflow-y:auto;padding:14px 16px;display:flex;flex-direction:column;gap:10px}
+.bub{max-width:94%;padding:9px 12px;border-radius:12px;word-break:break-word}.bub.me{align-self:flex-end;background:var(--acc);color:var(--acc-ink)}.bub.bot{background:var(--hover);align-self:flex-start}
+.ccard{border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-top:8px;background:var(--card)}.ccard b{display:block;margin-bottom:6px}.ccard div{display:flex;justify-content:space-between;gap:12px;padding:2px 0;font-size:14px}.ccard div span:last-child{text-align:right;white-space:nowrap}.ccard div span:first-child{min-width:0}
+.cgrp{font-size:11px;text-transform:uppercase;letter-spacing:.07em;color:var(--mute);margin:10px 0 4px}.cchips{display:flex;flex-wrap:wrap;gap:6px}
+.cchip{height:auto;padding:6px 12px;border-radius:99px;background:var(--card);color:var(--ink);border:1px solid var(--line);font-weight:500;font-size:13px;text-align:left}.cchip:hover{border-color:var(--acc);color:var(--acc);filter:none}
+.cchip small,#csug small{display:block;font:500 11px 'Noto Sans Gujarati',Inter,sans-serif;opacity:.8}.cchip:disabled{opacity:.45;cursor:default}
+#csug{padding:0 12px}#csug button{width:100%;justify-content:space-between;height:auto;padding:7px 10px;background:transparent;color:var(--ink);border:0;border-bottom:1px solid var(--line);border-radius:0;font-weight:500}
+#cform{padding:12px;border-top:1px solid var(--line)}
+@media(max-width:1100px){.chat-open main{margin-right:0}}@media(max-width:820px){ #chat{width:100vw} #chatbtn{bottom:76px}}details>summary{list-style:none}details>summary::-webkit-details-marker{display:none}
 .inv{--ink:#111;--line:#555;--mute:#444;background:#fff;color:#111;padding:0;font-size:14px}.inv table{margin:0}.inv th{color:#222;font-size:11px}.inv td,.inv th{padding:6px 8px;border-top:1px solid var(--line)}
 .inv .box{padding:10px 14px;border-top:1px solid var(--line)}.inv .two{display:grid;grid-template-columns:1fr 1fr}.inv .two>div{padding:10px 14px}.inv .two>div+div{border-left:1px solid var(--line)}
 .inv .gu{display:none!important}.inv .kv{display:grid;grid-template-columns:130px 1fr;gap:2px 8px}.inv .ttl{text-align:center;padding:12px 16px 8px}.inv .big{font-size:28px;font-weight:700;line-height:1.2}
@@ -307,7 +321,10 @@ const n=e.target.closest('tr').querySelectorAll('input');n[1].value=m.hsn||'';n[
 info();calc()</script>{% endmacro %}
 {% macro bar(qs) %}<form class=np style="display:flex;gap:8px;margin-bottom:16px"><input name=q value="{{qs}}" placeholder="Search…" style="max-width:340px"><button class=ghost>Search</button>{% if qs %}<a class="btn ghost" href="{{request.path}}">Clear</a>{% endif %}</form>{% endmacro %}
 {% macro pager(p, more, qs) %}<div class=np style="display:flex;gap:8px;justify-content:center;margin-top:8px">{% if p>1 %}<a class="btn ghost" href="?p={{p-1}}&q={{qs|urlencode}}">← Previous</a>{% endif %}{% if more %}<a class="btn ghost" href="?p={{p+1}}&q={{qs|urlencode}}">Next →</a>{% endif %}</div>{% endmacro %}"""
-TAIL = """</main></div><div id=toast hidden></div><script>
+TAIL = """</main></div><button id=chatbtn class=np>💬 Commands</button>
+<div id=chat class=np><div class=top><b>Commands</b><button class=ghost id=cclose type=button style="height:32px">✕</button></div><div id=clog></div><div id=csug></div>
+<form id=cform><input id=cin autocomplete=off placeholder="Type a command, or click one above"></form></div>
+<div id=toast hidden></div><script>
 let last=null,fl=null;
 const bd=(h,n)=>{const a=document.querySelector('aside a[href="'+h+'"]');if(!a)return;let em=a.querySelector('em');if(n){if(!em){em=document.createElement('em');a.append(em)}em.textContent=n}else if(em)em.remove()},
 toast=h=>{const t=document.getElementById('toast');t.innerHTML=h;t.hidden=false};
@@ -318,7 +335,7 @@ last=r.latest;fl=r.flatest}catch(e){}}
 poll();setInterval(poll,3000)
 const L=document.getElementById('lang');function setL(on){document.documentElement.classList.toggle('nogu',!on);L.textContent=on?'🌐 ગુજરાતી ✓':'🌐 Gujarati off'}
 let on=true;try{on=localStorage.getItem('gu')!='off'}catch(e){}setL(on);
-L.onclick=e=>{e.preventDefault();on=!on;try{localStorage.setItem('gu',on?'on':'off')}catch(e){}setL(on)}</script>"""
+L.onclick=e=>{e.preventDefault();on=!on;try{localStorage.setItem('gu',on?'on':'off')}catch(e){}setL(on)}</script><script src="/static/chat.js?v=1"></script>"""
 def gu_html(h):
     """Add the Gujarati line under every known English label (outside scripts and styles)."""
     def add(m):
@@ -874,6 +891,8 @@ def login():
 @app.route("/logout")
 def logout():
     session.clear(); return redirect("/login")
+
+import chatcmd; chatcmd.register(app, globals())
 
 if __name__ == "__main__":
     app.run(port=5050, debug=True)
