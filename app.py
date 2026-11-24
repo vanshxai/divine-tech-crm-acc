@@ -21,11 +21,11 @@ SCHEMA = """
 create table if not exists clients(id integer primary key, name text not null, phone, gstin, state, address, kind text default 'customer');
 create table if not exists items(id integer primary key, name text not null, unit text, hsn text, gst text, sale text, purch text, opening text);
 create table if not exists jobs(id integer primary key, client_id int, title text, status text default 'enquiry', followup text);
-create table if not exists invoices(id integer primary key, no text unique, date text, client_id int, narration text, taxable int, cgst int, sgst int, igst int, ro int, total int, voucher int, cancelled int default 0);
-create table if not exists lines(invoice_id int, descr text, qty text, rate text, gst text, hsn text, unit text, item_id int);
+create table if not exists invoices(id integer primary key, no text unique, date text, client_id int, narration text, taxable int, cgst int, sgst int, igst int, ro int, total int, voucher int, cancelled int default 0, incl int default 0, meta text, due text);
+create table if not exists lines(invoice_id int, descr text, qty text, rate text, gst text, hsn text, unit text, item_id int, disc text, taxable int, taxamt int);
 create table if not exists payments(id integer primary key, date text, invoice_id int, amount int, mode text, voucher int, cancelled int default 0);
-create table if not exists purchases(id integer primary key, no text unique, date text, party_id int, sup_no text, sup_date text, narration text, taxable int, cgst int, sgst int, igst int, ro int, total int, voucher int, draft_id int, cancelled int default 0);
-create table if not exists plines(purchase_id int, descr text, qty text, rate text, gst text, hsn text, unit text, item_id int);
+create table if not exists purchases(id integer primary key, no text unique, date text, party_id int, sup_no text, sup_date text, narration text, taxable int, cgst int, sgst int, igst int, ro int, total int, voucher int, draft_id int, cancelled int default 0, incl int default 0, meta text, due text, job_id int, doctype text default 'tax', calc_total int);
+create table if not exists plines(purchase_id int, descr text, qty text, rate text, gst text, hsn text, unit text, item_id int, disc text, taxable int, taxamt int);
 create table if not exists ppayments(id integer primary key, date text, purchase_id int, amount int, mode text, voucher int, cancelled int default 0);
 create table if not exists drafts(id integer primary key, created text, data text, status text default 'new');
 create table if not exists settings(key text primary key, value text);
@@ -35,21 +35,29 @@ create unique index if not exists inbox_uq on inbox(chat_id, msg_id, uid);
 create table if not exists ledger(id integer primary key, voucher int, date text, account text, client_id int, dr int default 0, cr int default 0);
 create trigger if not exists l_upd before update on ledger begin select raise(abort,'ledger is append-only'); end;
 create trigger if not exists l_del before delete on ledger begin select raise(abort,'ledger is append-only'); end;
+"""
+UPGRADES = ("alter table clients add column kind text default 'customer'", "alter table lines add column hsn text", "alter table lines add column unit text",
+            "alter table lines add column item_id int", "alter table plines add column unit text", "alter table plines add column item_id int",
+            "alter table invoices add column narration text", "alter table lines add column disc text", "alter table lines add column taxable int",
+            "alter table lines add column taxamt int", "alter table plines add column disc text", "alter table plines add column taxable int",
+            "alter table plines add column taxamt int", "alter table invoices add column incl int default 0", "alter table invoices add column meta text",
+            "alter table invoices add column due text", "alter table purchases add column incl int default 0", "alter table purchases add column meta text",
+            "alter table purchases add column due text", "alter table purchases add column job_id int", "alter table purchases add column doctype text default 'tax'",
+            "alter table purchases add column calc_total int")
+VIEWS = """
 drop view if exists inv_due; drop view if exists pur_due;
-create view inv_due as select i.id, i.no, i.date, i.client_id, c.name, i.total, i.cancelled,
+create view inv_due as select i.id, i.no, i.date, i.client_id, c.name, i.total, i.cancelled, 'tax' as doctype, i.due as due_date,
   i.total - coalesce((select sum(amount) from payments where invoice_id=i.id and cancelled=0),0) as due
   from invoices i join clients c on c.id=i.client_id;
-create view pur_due as select p.id, p.no, p.date, p.party_id, c.name, p.sup_no, p.total, p.cancelled,
+create view pur_due as select p.id, p.no, p.date, p.party_id, c.name, p.sup_no, p.total, p.cancelled, coalesce(p.doctype,'tax') as doctype, p.due as due_date,
   p.total - coalesce((select sum(amount) from ppayments where purchase_id=p.id and cancelled=0),0) as due
   from purchases p join clients c on c.id=p.party_id;
 """
 _c = sqlite3.connect(DB); _c.executescript(SCHEMA)
-for _s in ("alter table clients add column kind text default 'customer'", "alter table lines add column hsn text", "alter table lines add column unit text",
-           "alter table lines add column item_id int", "alter table plines add column unit text", "alter table plines add column item_id int",
-           "alter table invoices add column narration text"):
+for _s in UPGRADES:
     try: _c.execute(_s)
     except sqlite3.OperationalError: pass
-_c.commit(); _c.close()
+_c.executescript(VIEWS); _c.commit(); _c.close()
 
 # ---------- money: integer paise, Decimal maths, half-up rounding ----------
 rnd = lambda x: int(D(x).quantize(D(1), ROUND_HALF_UP))
@@ -93,24 +101,75 @@ def intra(p):
     x = (p["gstin"] or "").strip()
     return x[:2] == OWN_CODE if len(x) == 15 else not (p["state"] or "").strip() or p["state"].strip().lower() == OWN_STATE.lower()
 
+UNITS = {"mtr": "Mtr", "mts": "Mtr", "mt": "Mtr", "meter": "Mtr", "metre": "Mtr", "meters": "Mtr", "m": "Mtr",
+         "pcs": "Pcs", "pc": "Pcs", "nos": "Pcs", "no": "Pcs", "piece": "Pcs", "pieces": "Pcs", "bdl": "Bdl", "bundle": "Bdl", "bundles": "Bdl",
+         "roll": "Roll", "rolls": "Roll", "rl": "Roll", "kg": "Kg", "kgs": "Kg", "ltr": "Ltr", "lt": "Ltr", "litre": "Ltr", "liter": "Ltr",
+         "box": "Box", "boxes": "Box", "set": "Set", "sets": "Set"}
+unit_norm = lambda u: UNITS.get(u.strip().lower().rstrip("."), u.strip())      # Mtr / Mts / Meter all become Mtr
+META = {"place": "Place of supply", "rcm": "Reverse charge", "transport": "Transport", "vehicle": "Vehicle no.", "eway": "E-way bill no.",
+        "challan": "Challan no.", "po": "P.O. / order no.", "shipto": "Ship to"}
+meta_of = lambda f: json.dumps({k: f.get(k, "").strip() for k in META if f.get(k, "").strip()})
+cfg = lambda k, d="": (one("select value from settings where key=?", k) or [d])[0]
+
 def parse(f):
     out = []
-    for d, qty, rate, gst, hsn, unit in zip(*(f.getlist(k) for k in ("d", "q", "r", "g", "h", "u"))):
+    for d, qty, rate, gst, hsn, unit, disc in zip(*(f.getlist(k) for k in ("d", "q", "r", "g", "h", "u", "x"))):
         d, rate = d.strip(), rate.strip()
         if not d and not rate: continue
         if not rate: raise Oops(f"Rate is missing for {d}")
-        out.append((d, qty, rate, gst, hsn.strip(), unit.strip()))
+        out.append((d, qty, rate, gst, hsn.strip(), unit_norm(unit), disc.strip()))
     if not out: raise Oops("Add at least one item")
     return out
 
-def tax(lines, same_state):
-    taxable = gst = 0
-    for d, qty, rate, g_, *_ in lines:
-        if not d or D(qty) <= 0 or D(rate) < 0 or not 0 <= D(g_) <= 28: raise Oops("Check item, quantity, rate and GST")
-        t = paise(D(qty) * D(rate)); taxable += t; gst += rnd(D(t) * D(g_) / 100)
-    cg, sg, ig = (gst // 2, gst - gst // 2, 0) if same_state else (0, 0, gst)
+def calc(lines, same_state, incl=False):
+    """Per-line (taxable, tax) in paise, then totals. Rates may include tax; discount may be like 10+5."""
+    rows, groups = [], {}
+    for d, qty, rate, g_, _h, _u, disc in lines:
+        parts = [p for p in disc.split("+") if p.strip()]
+        if not d or D(qty) <= 0 or D(rate) < 0 or not 0 <= D(g_) <= 28 or any(not 0 <= D(p) <= 100 for p in parts): raise Oops("Check item, quantity, rate, discount and GST")
+        f = D(1)
+        for p in parts: f *= 1 - D(p) / 100
+        gross = paise(D(qty) * D(rate) * f)
+        t = rnd(D(gross) / (1 + D(g_) / 100)) if incl else gross
+        x = gross - t if incl else rnd(D(t) * D(g_) / 100)
+        rows.append((t, x)); gg = groups.setdefault(D(g_), [0, 0]); gg[0] += t; gg[1] += x
+    taxable, gst = sum(r[0] for r in rows), sum(r[1] for r in rows)
+    cg = sum(v[1] // 2 for v in groups.values()) if same_state else 0
+    sg = gst - cg if same_state else 0
+    ig = 0 if same_state else gst
     exact = taxable + gst; total = (exact + 50) // 100 * 100
-    return taxable, cg, sg, ig, total - exact, total
+    return rows, taxable, cg, sg, ig, total - exact, total
+
+def rate_groups(rows, same_state):
+    """[(rate, taxable, cgst, sgst, igst)] from stored per-line amounts, for the printed tax summary."""
+    g = {}
+    for rate, t, x in rows: a = g.setdefault(D(rate), [0, 0]); a[0] += t; a[1] += x
+    return [(r, a[0], a[1] // 2 if same_state else 0, a[1] - a[1] // 2 if same_state else 0, 0 if same_state else a[1]) for r, a in sorted(g.items())]
+
+ONES = "One Two Three Four Five Six Seven Eight Nine Ten Eleven Twelve Thirteen Fourteen Fifteen Sixteen Seventeen Eighteen Nineteen".split()
+TENS = "Twenty Thirty Forty Fifty Sixty Seventy Eighty Ninety".split()
+below100 = lambda n: ONES[n - 1] if n < 20 else TENS[n // 10 - 2] + (" " + ONES[n % 10 - 1] if n % 10 else "")
+def words(p):
+    r, ps = divmod(p, 100); out = []
+    for div, name in ((10**7, "Crore"), (10**5, "Lakh"), (1000, "Thousand")):
+        if r >= div: out.append(below100(r // div) + " " + name); r %= div
+    if r >= 100: out.append(ONES[r // 100 - 1] + " Hundred" + (" " + below100(r % 100) if r % 100 else ""))
+    elif r: out.append(below100(r))
+    return "Rupees " + (" ".join(out) or "Zero") + (f" and {below100(ps)} Paise" if ps else "") + " Only"
+app.add_template_filter(lambda p: words(int(p)), "words")
+
+def inv_no(date):
+    """Next sales invoice number, continuing the firm's own series (e.g. D26-001), restarting each financial year."""
+    d = dt.date.fromisoformat(date); pre = f"{cfg('inv_prefix', 'D')}{(d.year - (d.month < 4)) % 100:02d}-"
+    used = [int(r[0][len(pre):]) for r in q("select no from invoices where no like ?", pre + "%") if r[0][len(pre):].isdigit()]
+    if used: return f"{pre}{max(used) + 1:03d}"
+    start = cfg("inv_first_for")
+    if start == pre: return f"{pre}{int(cfg('inv_first')):03d}"        # the number set on the Company page, for that financial year
+    if start and pre > start: return f"{pre}001"                       # a new financial year restarts at 001
+    raise Oops("Set the next invoice number first: Company, Invoice numbering")
+
+def need_company():
+    if not (cfg("co_name") and cfg("co_gstin") and cfg("co_addr")): raise Oops("Fill in Company details first (name, address, GSTIN) so the bill is a valid tax invoice")
 
 def vno(pre, table, date):
     d = dt.date.fromisoformat(date); y = d.year - (d.month < 4); p = f"{pre}/{y}-{(y + 1) % 100:02d}/"
@@ -118,7 +177,7 @@ def vno(pre, table, date):
 
 iid = lambda name: (one("select id from items where lower(name)=lower(?)", name) or [None])[0]
 STOCK = """select i.*, cast(i.opening as real)
-  + coalesce((select sum(cast(qty as real)) from plines p join purchases h on h.id=p.purchase_id where p.item_id=i.id and h.cancelled=0),0)
+  + coalesce((select sum(cast(qty as real)) from plines p join purchases h on h.id=p.purchase_id where p.item_id=i.id and h.cancelled=0 and coalesce(h.doctype,'tax')='tax'),0)
   - coalesce((select sum(cast(qty as real)) from lines l join invoices h on h.id=l.invoice_id where l.item_id=i.id and h.cancelled=0),0) as stock from items i"""
 
 def parties(kinds, acc, a, b):
@@ -133,7 +192,8 @@ def item_data():
 # ---------- layout (Busy-style groups: Masters / Transactions / Reports) ----------
 NAV = [(None, [("/", "Home", "M3 11l9-8 9 8M5 10v10h14V10", "/")]),
        ("Masters", [("/clients", "Parties", "M16 21v-2a4 4 0 00-4-4H6a4 4 0 00-4 4v2M9 11a4 4 0 100-8 4 4 0 000 8M22 21v-2a4 4 0 00-3-3.9M16 3.1a4 4 0 010 7.8", "/client"),
-                    ("/items", "Items", "M21 8l-9-5-9 5v8l9 5 9-5zM3 8l9 5 9-5M12 13v8", "/item")]),
+                    ("/items", "Items", "M21 8l-9-5-9 5v8l9 5 9-5zM3 8l9 5 9-5M12 13v8", "/item"),
+                    ("/company", "Company", "M3 21h18M5 21V5l7-2 7 2v16M9 9h2M13 9h2M9 13h2M13 13h2", "/company")]),
        ("Transactions", [("/invoices", "Sales", "M14 3H6v18h12V7zM14 3v4h4M9 12h6M9 16h6", "/invoice"),
                          ("/purchases", "Purchase", "M6 2L3 6v14h18V6l-3-4zM3 6h18M16 10a4 4 0 01-8 0", "/purchase"),
                          ("/receipt", "Receipt", "M17 7L7 17M16 17H7V8", "/receipt"),
@@ -170,7 +230,7 @@ table{width:100%;border-collapse:collapse}th{font-size:12px;text-transform:upper
 td{padding:12px 10px;border-top:1px solid var(--line)}tbody tr:hover td{background:var(--hover)}.r{text-align:right}.mute{color:var(--mute)}
 .btn,button{display:inline-flex;align-items:center;gap:8px;background:var(--acc);color:var(--acc-ink);border:1px solid transparent;border-radius:9px;padding:0 16px;height:40px;font:600 14px Inter,system-ui,sans-serif;cursor:pointer}
 .btn:hover,button:hover{filter:brightness(1.08)}.ghost{background:transparent;color:var(--ink);border-color:var(--line)}.danger{background:var(--bad-soft);color:var(--bad)}
-input,select{font:15px Inter,system-ui,sans-serif;height:40px;padding:0 12px;border:1px solid var(--line);border-radius:9px;background:var(--card);color:var(--ink);width:100%}
+input,select,textarea{font:15px Inter,system-ui,sans-serif;height:40px;padding:0 12px;border:1px solid var(--line);border-radius:9px;background:var(--card);color:var(--ink);width:100%}
 input:focus,select:focus,button:focus-visible,a:focus-visible{outline:2px solid var(--acc);outline-offset:1px}td input{height:36px}
 label{font-size:13px;font-weight:500;color:var(--mute);display:block;margin-bottom:4px}.form{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px;align-items:end}
 .pill{display:inline-block;padding:2px 10px;border-radius:99px;font-size:12px;font-weight:600;background:var(--hover);color:var(--mute)}
@@ -183,40 +243,65 @@ label{font-size:13px;font-weight:500;color:var(--mute);display:block;margin-bott
 .fl{animation:fl 1.6s ease both}@keyframes fl{from{background:var(--acc-soft);box-shadow:0 0 0 2px var(--acc)}to{background:var(--card);box-shadow:none}}
 #toast{position:fixed;right:20px;bottom:20px;background:var(--card);border:1px solid var(--acc);border-radius:12px;padding:14px 18px;box-shadow:0 8px 30px #0003;z-index:9}
 .gu{display:block;font:500 .95em/1.35 'Noto Sans Gujarati',Inter,sans-serif;text-transform:none;letter-spacing:0;opacity:.9}
-h1 .gu{font-size:.52em;margin-top:2px}.btn .gu,button .gu,.pill .gu{display:inline;margin-left:6px}.pill .gu{margin-left:4px}.nogu .gu{display:none!important}
+h1 .gu{font-size:.52em;margin-top:2px}.btn .gu,button .gu,.pill .gu{display:inline;margin-left:6px}.pill .gu{margin-left:4px}.nogu .gu{display:none!important}textarea{height:auto;min-height:74px;padding:10px 12px;width:100%}
+.pill.Proforma{background:var(--warn-soft);color:var(--warn)}details>summary{list-style:none}details>summary::-webkit-details-marker{display:none}
+.inv{--ink:#111;--line:#555;--mute:#444;background:#fff;color:#111;padding:0;font-size:14px}.inv table{margin:0}.inv th{color:#222;font-size:11px}.inv td,.inv th{padding:6px 8px;border-top:1px solid var(--line)}
+.inv .box{padding:10px 14px;border-top:1px solid var(--line)}.inv .two{display:grid;grid-template-columns:1fr 1fr}.inv .two>div{padding:10px 14px}.inv .two>div+div{border-left:1px solid var(--line)}
+.inv .gu{display:none!important}.inv .kv{display:grid;grid-template-columns:130px 1fr;gap:2px 8px}.inv .ttl{text-align:center;padding:12px 16px 8px}.inv .big{font-size:28px;font-weight:700;line-height:1.2}
 @media(max-width:820px){aside .gu{display:none}.app{display:block}aside{position:fixed;top:auto;bottom:0;left:0;right:0;height:auto;flex-direction:row;overflow-x:auto;padding:6px;z-index:5}
 .brand,.grp{display:none}aside a{flex-direction:column;gap:2px;font-size:11px;padding:6px 10px}main{padding:20px 16px 96px}.cols,.vfoot{grid-template-columns:1fr}}
 @media print{aside,.np,#toast{display:none}.app{display:block}main{padding:0}.card{border:0}}
 </style><div class=app><aside><div class=brand>Divine Books<small>Divine Technologies</small></div>
 {% for grp, items in nav %}{% if grp %}<div class=grp>{{grp}}</div>{% endif %}{% for h,n,d,m in items %}<a href={{h}} class="{{'on' if (m=='/' and request.path=='/') or (m!='/' and request.path.startswith(m))}}"><svg viewBox="0 0 24 24"><path d="{{d}}"/></svg><span>{{n}}</span>{% if n=='Drafts' and nd %}<em>{{nd}}</em>{% elif n=='Inbox' and ni %}<em>{{ni}}</em>{% endif %}</a>{% endfor %}{% endfor %}<div style="margin-top:auto;padding:12px"><a href=/backup style="padding:0 0 8px;font-size:13px">⬇ Backup</a>{% if pw %}<a href=/logout style="padding:0 0 8px;font-size:13px">Log out</a>{% endif %}<a href=# id=lang style="padding:0;font-size:13px"></a></div></aside><main>
+{% macro extras(m, due) %}<details class=card style="margin-top:-8px"><summary style="cursor:pointer;font-weight:600">More details <span class=mute style="font-weight:400">(transport, e-way bill, ship-to…)</span></summary>
+<div class=form style="margin-top:14px"><div><label>Place of supply</label><input name=place value="{{m.place or ''}}"></div>
+<div><label>Reverse charge</label><select name=rcm><option value="">No<option value=Y {{'selected' if m.rcm=='Y'}}>Yes</select></div>
+<div><label>Transport</label><input name=transport value="{{m.transport or ''}}"></div><div><label>Vehicle no.</label><input name=vehicle value="{{m.vehicle or ''}}"></div>
+<div><label>E-way bill no.</label><input name=eway value="{{m.eway or ''}}"></div><div><label>Challan no.</label><input name=challan value="{{m.challan or ''}}"></div>
+<div><label>P.O. / order no.</label><input name=po value="{{m.po or ''}}"></div><div><label>Due date</label><input name=due type=date value="{{due or ''}}"></div>
+<div style="grid-column:1/-1"><label>Ship to (delivery address)</label><input name=shipto value="{{m.shipto or ''}}"></div></div></details>{% endmacro %}
 {% macro grid(rows, names, imap, mode, fl) %}<datalist id=itemlist>{% for n in names %}<option value="{{n}}">{% endfor %}</datalist>
-<table id=lines><thead><tr><th>Item<th style=width:110px>HSN<th style=width:70px>Qty<th style=width:80px>Unit<th style=width:105px>Rate ₹<th style=width:62px>GST %<th class=r style=width:105px>Amount<th style=width:44px></tr></thead><tbody>
+<table id=lines><thead><tr><th>Item<th style=width:105px>HSN<th style=width:66px>Qty<th style=width:74px>Unit<th style=width:100px>Rate ₹<th style=width:66px>Disc %<th style=width:58px>GST %<th class=r style=width:100px>Amount<th style=width:40px></tr></thead><tbody>
 {% for r in rows %}{% set c = 'fl' if fl and r.descr else '' %}{% set dl = ([loop.index, 12]|min) * 0.15 %}<tr><td><input name=d value="{{r.descr}}" list=itemlist autocomplete=off class="{{c}}" style="animation-delay:{{dl}}s">
 <td><input name=h value="{{r.hsn}}" class="{{c}}" style="animation-delay:{{dl+0.05}}s"><td><input name=q value="{{r.qty or 1}}" class="{{c}}" style="animation-delay:{{dl+0.1}}s">
 <td><input name=u value="{{r.unit or ''}}" class="{{c}}" style="animation-delay:{{dl+0.15}}s"><td><input name=r value="{{r.rate}}" class="{{c}}" style="animation-delay:{{dl+0.2}}s">
-<td><input name=g value="{{r.gst or 18}}" class="{{c}}" style="animation-delay:{{dl+0.25}}s"><td class="r amt"><td><button type=button class=ghost onclick="delRow(this)" tabindex=-1 title="Remove row">×</button></tr>{% endfor %}</tbody></table>
+<td><input name=x value="{{r.disc or ''}}" class="{{c}}" placeholder="0" style="animation-delay:{{dl+0.25}}s"><td><input name=g value="{{r.gst or 18}}" class="{{c}}" style="animation-delay:{{dl+0.3}}s">
+<td class="r amt"><td><button type=button class=ghost onclick="delRow(this)" tabindex=-1 title="Remove row">×</button></tr>{% endfor %}</tbody></table>
 <p><button type=button class=ghost onclick="addRow()">+ Add row</button> <span class=mute id=cnt></span></p></div>
 <div class=vfoot><div class=card><h2>GST summary</h2><table><thead><tr><th>Rate<th class=r>Taxable<th class=r>CGST<th class=r>SGST<th class=r>IGST</tr></thead><tbody id=gs></tbody></table></div>
 <div class=card><h2>Bill sundry</h2><table><tbody id=sundry></tbody></table><div class=bigtot id=grand>₹0.00</div></div></div>
+{% if mode=='buy' %}<div class=card><h2>As printed on the supplier's bill</h2><p class=mute style="margin-top:-6px">Filled from the items. If the paper bill shows different figures, type the paper's figures here.</p>
+<div class=form><div><label>Taxable ₹</label><input id=pr_t name=pr_t type=number step=0.01></div><div><label>CGST ₹</label><input id=pr_c name=pr_c type=number step=0.01></div>
+<div><label>SGST ₹</label><input id=pr_s name=pr_s type=number step=0.01></div><div><label>IGST ₹</label><input id=pr_i name=pr_i type=number step=0.01></div>
+<div><label>Round off ₹</label><input id=pr_r name=pr_r type=number step=0.01></div><div><label>Total ₹</label><input id=pr_g name=pr_g type=number step=0.01></div></div>
+<input type=hidden name=touched id=touched value=""><p id=diffwarn class=note style="display:none;margin-top:14px"></p>
+<label id=ackrow style="display:none;margin-top:10px"><input type=checkbox name=ack value=1 style="width:auto;height:auto;display:inline"> The supplier's figures are right</label></div>{% endif %}
 <script>
-const ITEMS={{imap|tojson}},MODE="{{mode}}",P=document.getElementById('party'),body=document.querySelector('#lines tbody');
-const f2=x=>x.toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2}),blank=l=>l.forEach((e,k)=>{e.value=k==2?1:k==5?18:'';e.className='';e.style.animation='none'});
+const ITEMS={{imap|tojson}},MODE="{{mode}}",P=document.getElementById('party'),body=document.querySelector('#lines tbody'),INC=document.getElementById('incl');
+const PR=['pr_t','pr_c','pr_s','pr_i','pr_r','pr_g'].map(i=>document.getElementById(i)),TCH=document.getElementById('touched');let CAL=[0,0,0,0,0,0];
+const f2=x=>x.toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2}),blank=l=>l.forEach((e,k)=>{e.value=k==2?1:k==6?18:'';e.className='';e.style.animation='none'});
 function addRow(){const t=body.lastElementChild.cloneNode(true);blank(t.querySelectorAll('input'));t.querySelector('.amt').textContent='';body.append(t);return t}
 function delRow(b){const t=b.closest('tr');if(body.rows.length>1)t.remove();else blank(t.querySelectorAll('input'));calc()}
 function info(){const o=P.selectedOptions[0];document.getElementById('pinfo').textContent=!o||!o.value?'':(o.dataset.gstin||'No GSTIN')+' · '+(o.dataset.intra=='1'?'Same state: CGST + SGST':'Other state: IGST')+' · '+(MODE=='sale'?'They owe us ₹':'We owe ₹')+f2(o.dataset.bal/100)}
-function calc(){const o=P.selectedOptions[0],same=!o||o.dataset.intra!='0';let grp={},tx=0,gs=0,k=0;
-for(const r of body.rows){const n=r.querySelectorAll('input'),a=Math.round((+n[2].value||0)*(+n[4].value||0)*100)/100;r.querySelector('.amt').textContent=a?f2(a):'';
-if(a){k++;const rt=+n[5].value||0,t=Math.round(a*rt)/100;grp[rt]=grp[rt]||{x:0,t:0};grp[rt].x+=a;grp[rt].t+=t;tx+=a;gs+=t}}
-const h=Object.keys(grp).sort((a,b)=>a-b).map(k=>{const v=grp[k],c=same?f2(v.t/2):'',i=same?'':f2(v.t);return '<tr><td>'+k+'%<td class=r>'+f2(v.x)+'<td class=r>'+c+'<td class=r>'+c+'<td class=r>'+i+'</tr>'}).join('');
-document.getElementById('gs').innerHTML=h||'<tr><td class=mute>Add items above</tr>';const ex=tx+gs,tot=Math.round(ex);
-document.getElementById('sundry').innerHTML='<tr><td>Taxable value<td class=r>'+f2(tx)+'</tr>'+(same?'<tr><td>CGST<td class=r>'+f2(gs/2)+'</tr><tr><td>SGST<td class=r>'+f2(gs/2)+'</tr>':'<tr><td>IGST<td class=r>'+f2(gs)+'</tr>')+'<tr><td>Round off<td class=r>'+f2(tot-ex)+'</tr>';
-document.getElementById('grand').textContent='₹'+f2(tot);document.getElementById('cnt').textContent=k+' items'}
-document.addEventListener('input',e=>{if(e.target.name=='d'&&e.target.value&&e.target.closest('tr')==body.lastElementChild)addRow();calc()});
-P.addEventListener('change',()=>{info();calc()});
+function diff(){if(!PR[0])return;const v=PR.map(e=>Math.round((+e.value||0)*100)),gap=Math.max(Math.abs(v[0]-CAL[0]),Math.abs(v[1]+v[2]+v[3]-CAL[1]-CAL[2]-CAL[3])),w=document.getElementById('diffwarn');
+w.style.display=gap>100?'block':'none';document.getElementById('ackrow').style.display=gap>100?'block':'none';w.textContent='The bill figures differ from the items by ₹'+f2(gap/100)+'. Check qty, rate and discount, or tick the box if the paper bill is right.'}
+function calc(){const o=P.selectedOptions[0],same=!o||o.dataset.intra!='0',incl=INC.value=='1';let grp={},tx=0,gs=0,k=0;
+for(const r of body.rows){const n=r.querySelectorAll('input'),q=+n[2].value||0,rt=+n[4].value||0,g=+n[6].value||0;let fc=1;String(n[5].value||'').split('+').forEach(x=>fc*=1-(+x||0)/100);
+const gross=Math.round(q*rt*fc*100),t=incl?Math.round(gross/(1+g/100)):gross,x=incl?gross-t:Math.round(t*g/100);r.querySelector('.amt').textContent=gross?f2((incl?gross:t)/100):'';
+if(gross){k++;grp[g]=grp[g]||{x:0,t:0};grp[g].x+=t;grp[g].t+=x;tx+=t;gs+=x}}
+let cg=0;const h=Object.keys(grp).sort((a,b)=>a-b).map(k=>{const v=grp[k],c=same?Math.floor(v.t/2):0;cg+=c;return '<tr><td>'+k+'%<td class=r>'+f2(v.x/100)+'<td class=r>'+(same?f2(c/100):'')+'<td class=r>'+(same?f2((v.t-c)/100):'')+'<td class=r>'+(same?'':f2(v.t/100))+'</tr>'}).join('');
+const sg=same?gs-cg:0,ig=same?0:gs,ex=tx+gs,tot=Math.round(ex/100)*100,ro=tot-ex;
+document.getElementById('gs').innerHTML=h||'<tr><td class=mute>Add items above</tr>';
+document.getElementById('sundry').innerHTML='<tr><td>Taxable value<td class=r>'+f2(tx/100)+'</tr>'+(same?'<tr><td>CGST<td class=r>'+f2(cg/100)+'</tr><tr><td>SGST<td class=r>'+f2(sg/100)+'</tr>':'<tr><td>IGST<td class=r>'+f2(ig/100)+'</tr>')+'<tr><td>Round off<td class=r>'+f2(ro/100)+'</tr>';
+document.getElementById('grand').textContent='₹'+f2(tot/100);document.getElementById('cnt').textContent=k+' items';CAL=[tx,cg,sg,ig,ro,tot];
+if(PR[0]&&!TCH.value)PR.forEach((e,i)=>e.value=(CAL[i]/100).toFixed(2));diff()}
+if(PR[0])PR.forEach(e=>e.addEventListener('input',()=>{TCH.value=1;diff()}));
+document.addEventListener('input',e=>{if(PR.includes(e.target))return;if(e.target.name=='d'&&e.target.value&&e.target.closest('tr')==body.lastElementChild)addRow();calc()});
+P.addEventListener('change',()=>{info();calc()});INC.addEventListener('change',calc);
 document.addEventListener('keydown',e=>{const t=e.target;if(e.key!='Enter'||t.tagName!='INPUT'||!t.form||!t.form.classList.contains('v'))return;e.preventDefault();
 const all=()=>[...t.form.querySelectorAll('input:not([type=hidden]),select')];let f=all();if(t.closest('#lines')&&f.indexOf(t)==f.length-1){addRow();f=all()}f[f.indexOf(t)+1]?.focus()});
 document.addEventListener('change',e=>{const m=ITEMS[(e.target.value||'').toLowerCase()];if(!m||!e.target.name||e.target.name!='d')return;
-const n=e.target.closest('tr').querySelectorAll('input');n[1].value=m.hsn||'';n[3].value=m.unit||'';n[4].value=(MODE=='sale'?m.sale:m.buy)||'';n[5].value=m.gst||18;calc()});
+const n=e.target.closest('tr').querySelectorAll('input');n[1].value=m.hsn||'';n[3].value=m.unit||'';n[4].value=(MODE=='sale'?m.sale:m.buy)||'';n[6].value=m.gst||18;calc()});
 info();calc()</script>{% endmacro %}
 {% macro bar(qs) %}<form class=np style="display:flex;gap:8px;margin-bottom:16px"><input name=q value="{{qs}}" placeholder="Search…" style="max-width:340px"><button class=ghost>Search</button>{% if qs %}<a class="btn ghost" href="{{request.path}}">Clear</a>{% endif %}</form>{% endmacro %}
 {% macro pager(p, more, qs) %}<div class=np style="display:flex;gap:8px;justify-content:center;margin-top:8px">{% if p>1 %}<a class="btn ghost" href="?p={{p-1}}&q={{qs|urlencode}}">← Previous</a>{% endif %}{% if more %}<a class="btn ghost" href="?p={{p+1}}&q={{qs|urlencode}}">Next →</a>{% endif %}</div>{% endmacro %}"""
@@ -245,7 +330,7 @@ page = lambda body, **k: gu_html(R(HEAD + body + TAIL, nav=NAV, **k))
 today = lambda: str(dt.date.today())
 app.context_processor(lambda: {"nd": one("select count(*) from drafts where status='new'")[0], "ni": one("select count(*) from inbox where status='new'")[0], "pw": bool(PASSWORD)})
 
-def bill_state(d): return "Cancelled" if d["cancelled"] else "Paid" if d["due"] <= 0 else "Part" if d["due"] < d["total"] else "Due"
+def bill_state(d): return "Cancelled" if d["cancelled"] else "Proforma" if d["doctype"] == "proforma" else "Paid" if d["due"] <= 0 else "Part" if d["due"] < d["total"] else "Due"
 
 @app.errorhandler(Oops)
 def _oops(e): return page("<div class=card><h2>⚠ {{m}}</h2><p class=mute>{{g}}</p><p class=mute>Go back and fix it, then try again.</p></div>", m=str(e), g=GU.get(str(e), "")), 400
@@ -311,9 +396,9 @@ def item_vals(f, me=0):
     if not n: raise Oops("Item name is needed")
     if (e := iid(n)) and e != me: raise Oops("An item with this name already exists")
     if not 0 <= D(f["gst"]) <= 28 or min(D(f["sale"] or 0), D(f["purch"] or 0), D(f["opening"] or 0)) < 0: raise Oops("Check GST, prices and opening stock")
-    return n, f["unit"].strip() or "Pcs", f["hsn"].strip(), f["gst"], f["sale"] or "0", f["purch"] or "0", f["opening"] or "0"
+    return n, unit_norm(f["unit"]) or "Pcs", f["hsn"].strip(), f["gst"], f["sale"] or "0", f["purch"] or "0", f["opening"] or "0"
 
-ITEM_FORM = """<div><label>Name</label><input name=name value="{{i.name}}" required></div><div><label>Unit</label><input name=unit value="{{i.unit or 'Pcs'}}" list=units><datalist id=units><option>Pcs<option>Nos<option>Mtr<option>Box<option>Set<option>Roll<option>Kg<option>Ltr</datalist></div>
+ITEM_FORM = """<div><label>Name</label><input name=name value="{{i.name}}" required></div><div><label>Unit</label><input name=unit value="{{i.unit or 'Pcs'}}" list=units><datalist id=units><option>Pcs<option>Mtr<option>Bdl<option>Roll<option>Set<option>Box<option>Kg<option>Ltr</datalist></div>
 <div><label>HSN / SAC</label><input name=hsn value="{{i.hsn or ''}}"></div><div><label>GST %</label><input name=gst type=number step=0.01 value="{{i.gst or 18}}"></div>
 <div><label>Sale price ₹</label><input name=sale type=number step=0.01 value="{{i.sale or ''}}"></div><div><label>Purchase price ₹</label><input name=purch type=number step=0.01 value="{{i.purch or ''}}"></div>
 <div><label>Opening stock</label><input name=opening type=number step=any value="{{i.opening or 0}}"></div>"""
@@ -387,51 +472,70 @@ def invoices():
 @app.route("/invoice/new", methods=["GET", "POST"])
 def invoice_new():
     if request.method == "GET":
-        rows, imap = item_data()
-        return page("""<div class=head><h1>Sales voucher</h1></div><form method=post class=v><div class=card><div class=form>
+        rows, imap = item_data(); warn = ""
+        try: vn = inv_no(today()); need_company()
+        except Oops as e: vn, warn = "—", str(e)
+        return page("""<div class=head><h1>Sales voucher</h1></div>{% if warn %}<div class=note>⚠ {{warn}}. <a href=/company><b>Open Company details</b></a></div>{% endif %}
+<form method=post class=v><div class=card><div class=form>
 <div><label>Series</label><div class=ro>Main</div></div><div><label>Voucher no.</label><div class=ro>{{vn}}</div></div><div><label>Date</label><input name=date type=date value={{d}}></div>
 <div><label>Customer</label><select name=client id=party required><option value="">Choose…</option>{% for c in cs %}<option value={{c.id}} data-intra={{c.intra}} data-bal={{c.bal}} data-gstin="{{c.gstin}}" {{'selected' if c.id|string==sel}}>{{c.name}}</option>{% endfor %}</select></div>
 <div><label>Job (optional)</label><select name=job><option value="">None</option>{% for j in js %}<option value={{j.id}}>{{j.name}}: {{j.title}}</option>{% endfor %}</select></div>
+<div><label>Rates are</label><select name=incl id=incl><option value=0>Without tax<option value=1>Including tax</select></div>
 <div><label>Narration</label><input name=narration></div></div><p class=pinfo id=pinfo></p></div>
-<div class=card>{{grid([{}] * 6, names, items, 'sale', false)}}<button>Save sales bill</button></form>""",
-            cs=parties("'customer','both'", "Debtors", "dr", "cr"), sel=request.args.get("client", ""), d=today(), vn=vno(PREFIX, "invoices", today()), names=[r["name"] for r in rows], items=imap,
+{{extras({}, '')}}<div class=card>{{grid([{}] * 6, names, items, 'sale', false)}}<button>Save sales bill</button></form>""",
+            cs=parties("'customer','both'", "Debtors", "dr", "cr"), sel=request.args.get("client", ""), d=today(), vn=vn, warn=warn, names=[r["name"] for r in rows], items=imap,
             js=q("select j.*, c.name from jobs j join clients c on c.id=j.client_id where status!='invoiced'"))
-    f = request.form; lines = parse(f)
+    f = request.form; need_company(); lines = parse(f); incl = f.get("incl") == "1"
     cl = one("select * from clients where id=?", f["client"])
-    taxable, cg, sg, ig, ro, total = tax(lines, intra(cl))
+    rows, taxable, cg, sg, ig, ro, total = calc(lines, intra(cl), incl)
     with db() as c:
-        no = vno(PREFIX, "invoices", f["date"])
+        no = inv_no(f["date"])
         v = post(f["date"], [("Debtors", cl["id"], total, 0), ("Sales", None, 0, taxable)]
                  + [(a, None, 0, x) for a, x in (("CGST", cg), ("SGST", sg), ("IGST", ig)) if x]
                  + ([("Round off", None, max(-ro, 0), max(ro, 0))] if ro else []))
-        i = c.execute("insert into invoices(no,date,client_id,narration,taxable,cgst,sgst,igst,ro,total,voucher) values(?,?,?,?,?,?,?,?,?,?,?)",
-                      (no, f["date"], cl["id"], f["narration"], taxable, cg, sg, ig, ro, total, v)).lastrowid
-        c.executemany("insert into lines(invoice_id,descr,qty,rate,gst,hsn,unit,item_id) values(?,?,?,?,?,?,?,?)", [(i, d, qy, r, gs, h, u, iid(d)) for d, qy, r, gs, h, u in lines])
+        i = c.execute("insert into invoices(no,date,client_id,narration,taxable,cgst,sgst,igst,ro,total,voucher,incl,meta,due) values(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                      (no, f["date"], cl["id"], f["narration"], taxable, cg, sg, ig, ro, total, v, int(incl), meta_of(f), f.get("due") or None)).lastrowid
+        c.executemany("insert into lines(invoice_id,descr,qty,rate,gst,hsn,unit,item_id,disc,taxable,taxamt) values(?,?,?,?,?,?,?,?,?,?,?)",
+                      [(i, d, qy, r, gs, h, u, iid(d), dc, t, x) for (d, qy, r, gs, h, u, dc), (t, x) in zip(lines, rows)])
         if f["job"]: c.execute("update jobs set status='invoiced' where id=?", (f["job"],))
     return redirect(f"/invoice/{i}")
 
-DOC = """<div class=card><div style="display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:20px"><div><h2>{{who}}</h2><b>{{v.name}}</b><br><span class=mute>{{v.gstin}}<br>{{v.address}}</span></div>
-<div class=r><h2>{{title}}</h2><b>{{v.no}}</b><br><span class=mute>{{v.date}}</span>{% if v.sup_no %}<br><span class=mute>Supplier bill {{v.sup_no}} · {{v.sup_date}}</span>{% endif %}</div></div>
-<table><thead><tr><th>Item<th>HSN<th class=r>Qty<th class=r>Rate<th class=r>GST %<th class=r>Amount</tr></thead><tbody>
-{% for d,h,qy,u,r,gs,a in ls %}<tr><td>{{d}}<td class=mute>{{h or ''}}<td class=r>{{qy}} {{u or ''}}<td class=r>{{r}}<td class=r>{{gs}}<td class=r>{{a|rs}}</tr>{% endfor %}
-<tr><td colspan=5 class=r>Taxable value<td class=r>{{v.taxable|rs}}</tr>
-{% for n,x in (('CGST',v.cgst),('SGST',v.sgst),('IGST',v.igst)) if x %}<tr><td colspan=5 class=r>{{n}}<td class=r>{{x|rs}}</tr>{% endfor %}
-{% if v.ro %}<tr><td colspan=5 class=r>Round off<td class=r>{{v.ro|rs}}</tr>{% endif %}
-<tr><td colspan=5 class=r><b>Total</b><td class=r><b>₹{{v.total|rs}}</b></tr></tbody></table>{% if v.narration %}<p class=mute>Note: {{v.narration}}</p>{% endif %}</div>"""
+def doc_lines(rows): return [(l["descr"], l["hsn"], l["qty"], l["unit"], l["rate"], l["disc"], l["gst"], l["taxable"] if l["taxable"] is not None else paise(D(l["qty"]) * D(l["rate"]))) for l in rows]
 
-def doc_lines(rows): return [(l["descr"], l["hsn"], l["qty"], l["unit"], l["rate"], l["gst"], paise(D(l["qty"]) * D(l["rate"]))) for l in rows]
+TAXINV = """<div class="card inv"><div class=box style="display:flex;justify-content:space-between;border-top:0"><b>GSTIN : {{co.gstin}}</b><i>Original Copy</i></div>
+<div class=ttl><div style="font-size:12px;letter-spacing:.12em"><u>TAX INVOICE</u></div><div class=big>{{co.name}}</div><div>{{co.addr}}</div><div>PAN : {{co.pan}}{% if co.phone %} · Tel : {{co.phone}}{% endif %}</div><i>{{co.email}}</i></div>
+<div class="two" style="border-top:1px solid var(--line)"><div><b>Party Details :</b><br><b>{{v.name}}</b><br>{{v.address}}<br>{{v.state}}<br>GSTIN / UIN : {{v.gstin or '—'}}{% if v.phone %}<br>Mobile : {{v.phone}}{% endif %}</div>
+<div><div class=kv><span>Invoice No.</span><b>: {{v.no}}</b><span>Dated</span><span>: {{v.date_fmt}}</span><span>Place of Supply</span><span>: {{meta.place or place}}</span><span>Reverse Charge</span><span>: {{meta.rcm or 'N'}}</span>
+<span>Transport</span><span>: {{meta.transport or ''}}</span><span>Vehicle No.</span><span>: {{meta.vehicle or ''}}</span><span>E-Way Bill No.</span><span>: {{meta.eway or ''}}</span>{% if meta.po %}<span>Order No.</span><span>: {{meta.po}}</span>{% endif %}{% if v.due %}<span>Due Date</span><span>: {{v.due}}</span>{% endif %}</div></div></div>
+{% if meta.shipto %}<div class=box><b>Shipped to :</b> {{meta.shipto}}</div>{% endif %}{% if v.narration %}<div class=box>{{v.narration}}</div>{% endif %}
+<table><thead><tr><th>S.N.<th>Description of Goods<th>HSN/SAC<th class=r>Qty.<th>Unit<th class=r>Price{{' (incl. tax)' if v.incl}}<th class=r>Disc %<th class=r>Amount (₹)</tr></thead><tbody>
+{% for d,h,qy,u,r,dc,gs,a in ls %}<tr><td>{{loop.index}}.<td>{{d}}<td>{{h or ''}}<td class=r>{{qy}}<td>{{u or ''}}<td class=r>{{r}}<td class=r>{{dc or ''}}<td class=r>{{a|rs}}</tr>{% endfor %}</tbody></table>
+<div class=box style="display:flex;justify-content:flex-end"><table style="width:340px"><tbody>
+<tr><td style="border:0">Taxable value<td class=r style="border:0">{{v.taxable|rs}}
+{% for rt,t,c,s,i in grp %}{% if c %}<tr><td style="border:0">Add : CGST @ {{'%.2f'|format(rt/2)}} %<td class=r style="border:0">{{c|rs}}<tr><td style="border:0">Add : SGST @ {{'%.2f'|format(rt/2)}} %<td class=r style="border:0">{{s|rs}}{% elif i %}<tr><td style="border:0">Add : IGST @ {{'%.2f'|format(rt)}} %<td class=r style="border:0">{{i|rs}}{% endif %}{% endfor %}
+{% if v.ro %}<tr><td style="border:0">Round off<td class=r style="border:0">{{v.ro|rs}}{% endif %}
+<tr><td><b>Grand Total ₹</b><td class=r><b>{{v.total|rs}}</b></tbody></table></div>
+<div class=box><table style="width:auto"><thead><tr><th>Tax Rate<th class=r>Taxable Amt.<th class=r>CGST Amt.<th class=r>SGST Amt.<th class=r>IGST Amt.<th class=r>Total Tax</tr></thead><tbody>
+{% for rt,t,c,s,i in grp %}<tr><td>{{rt}}%<td class=r>{{t|rs}}<td class=r>{{c|rs}}<td class=r>{{s|rs}}<td class=r>{{i|rs}}<td class=r>{{(c+s+i)|rs}}</tr>{% endfor %}</tbody></table></div>
+<div class=box><b>{{v.total|words}}</b></div>
+<div class=box style="white-space:pre-line"><b>Bank Details :</b> {{co.bank}}</div>
+<div class="two"><div><b>Terms &amp; Conditions</b><div style="white-space:pre-line;font-size:12px">{{co.terms}}</div></div><div style="min-height:110px"><span class=mute>Receiver's Signature :</span><div style="text-align:right;margin-top:56px"><b>For {{co.name}}</b><br>Authorised Signatory</div></div></div></div>"""
 
 @app.route("/invoice/<int:i>")
 def invoice(i):
-    v = one("select i.*, c.name, c.gstin, c.address from invoices i join clients c on c.id=i.client_id where i.id=?", i)
-    ls = doc_lines(q("select descr,hsn,qty,unit,rate,gst from lines where invoice_id=?", i))
+    v = dict(one("select i.*, c.name, c.gstin, c.address, c.state, c.phone from invoices i join clients c on c.id=i.client_id where i.id=?", i))
+    raw = q("select descr,hsn,qty,unit,rate,disc,gst,taxable,taxamt from lines where invoice_id=?", i)
+    ls = doc_lines(raw); same = intra(v); v["date_fmt"] = dt.date.fromisoformat(v["date"]).strftime("%d-%m-%Y")
+    grp = rate_groups([(l["gst"], l["taxable"] if l["taxable"] is not None else paise(D(l["qty"]) * D(l["rate"])), l["taxamt"] or 0) for l in raw], same)
+    if raw and raw[0]["taxable"] is None: grp = [(D(18), v["taxable"], v["cgst"], v["sgst"], v["igst"])]        # bills made before per-line tax was stored
     pays = q("select * from payments where invoice_id=? order by id", i); paid = sum(p["amount"] for p in pays if not p["cancelled"])
+    co = {k[3:]: cfg(k) for k in ("co_name", "co_addr", "co_gstin", "co_pan", "co_phone", "co_email", "co_bank", "co_terms")}
     return page("""<div class="head np"><h1>{{v.no}} {% if v.cancelled %}<span class="pill Cancelled">Cancelled</span>{% elif v.total-paid<=0 %}<span class="pill Paid">Paid</span>{% endif %}</h1><div>
-{% if not v.cancelled %}<a class=btn href="/receipt?invoice={{v.id}}">Record receipt</a> {% endif %}<button class=ghost onclick=print()>Print</button></div></div>""" + DOC + """
+{% if not v.cancelled %}<a class=btn href="/receipt?invoice={{v.id}}">Record receipt</a> {% endif %}<button class=ghost onclick=print()>Print</button></div></div>""" + TAXINV + """
 <div class="card np"><h2>Receipts · Due ₹{{(v.total-paid)|rs}}</h2>{% for p in pays %}<form method=post action=/receipt/{{p.id}}/cancel style="display:flex;gap:12px;align-items:center;justify-content:space-between;padding:6px 0">
 <span>{{p.date}} · {{p.mode}} · ₹{{p.amount|rs}} {% if p.cancelled %}<span class="pill Cancelled">undone</span>{% endif %}</span>{% if not p.cancelled %}<button class="ghost danger">Undo</button>{% endif %}</form>{% else %}<p class=empty>No receipts yet.</p>{% endfor %}</div>
 {% if not v.cancelled %}<form class=np method=post action=/invoice/{{v.id}}/cancel onsubmit="return confirm('Cancel this bill? A reversing entry will be posted.')"><button class=danger>Cancel bill</button></form>{% endif %}""",
-        v=v, ls=ls, pays=pays, paid=paid, who="Bill to", title="Tax invoice")
+        v=v, ls=ls, pays=pays, paid=paid, co=co, grp=grp, meta=json.loads(v["meta"] or "{}"), place=f"{v['state'] or OWN_STATE} ({(v['gstin'] or OWN_CODE)[:2]})")
 
 @app.post("/invoice/<int:i>/cancel")
 def invoice_cancel(i):
@@ -449,8 +553,21 @@ def purchases():
     rows = q("select * from pur_due where no like ? or name like ? or sup_no like ? order by date desc, id desc limit ? offset ?", like, like, like, PER + 1, (p - 1) * PER)
     more, rows = len(rows) > PER, rows[:PER]
     return page("""<div class=head><h1>Purchase</h1><a class=btn href=/purchase/new>+ New purchase bill</a></div>{{bar(qs)}}<div class=card><table><thead><tr><th>Number<th>Date<th>Supplier<th>Supplier bill<th class=r>Total<th class=r>To pay<th>Status</tr></thead><tbody>
-{% for d in rows %}<tr><td><a href=/purchase/{{d.id}}><b>{{d.no}}</b></a><td class=mute>{{d.date}}<td>{{d.name}}<td class=mute>{{d.sup_no}}<td class=r>₹{{d.total|rs}}<td class=r>{{(0 if d.cancelled else d.due)|rs}}<td><span class="pill {{st(d)}}">{{st(d)}}</span></tr>
+{% for d in rows %}<tr><td><a href=/purchase/{{d.id}}><b>{{d.no}}</b></a><td class=mute>{{d.date}}<td>{{d.name}}<td class=mute>{{d.sup_no}}<td class=r>₹{{d.total|rs}}<td class=r>{{(0 if d.cancelled or d.doctype=='proforma' else d.due)|rs}}<td><span class="pill {{st(d)}}">{{st(d)}}</span></tr>
 {% else %}<tr><td class=empty colspan=7>No purchase bills yet.</tr>{% endfor %}</tbody></table></div>{{pager(p, more, qs)}}""", rows=rows, st=bill_state, qs=qs, p=p, more=more)
+
+def post_purchase(date, party, taxable, cg, sg, ig, ro, total):
+    return post(date, [("Purchases", None, taxable, 0)] + [(a, None, x, 0) for a, x in (("Input CGST", cg), ("Input SGST", sg), ("Input IGST", ig)) if x]
+                + ([("Round off", None, max(ro, 0), max(-ro, 0))] if ro else []) + [("Creditors", party, 0, total)])
+
+def printed(f, p, taxable, cg, sg, ig):
+    """Use the supplier's own printed figures (what the tax credit depends on); the item maths only checks them."""
+    t, c_, s_, i_, r_, g_ = (paise(f[k] or 0) for k in ("pr_t", "pr_c", "pr_s", "pr_i", "pr_r", "pr_g"))
+    if t + c_ + s_ + i_ + r_ != g_: raise Oops("The figures on the bill do not add up (taxable + taxes + round-off must equal the total)")
+    if (intra(p) and i_) or (not intra(p) and (c_ or s_)): raise Oops("The tax type does not match the supplier's state (CGST+SGST for same state, IGST for other states)")
+    gap = max(abs(t - taxable), abs(c_ + s_ + i_ - (cg + sg + ig)))
+    if gap > 100 and not f.get("ack"): raise Oops(f"The bill's figures differ from the items by ₹{gap / 100:,.2f}. If the paper bill is right, tick the box and save again")
+    return t, c_, s_, i_, r_, g_
 
 @app.route("/purchase/new", methods=["GET", "POST"])
 def purchase_new():
@@ -473,36 +590,68 @@ def purchase_new():
 <div><label>Supplier</label><select name=party id=party required><option value="">Choose…</option>{% for c in cs %}<option value={{c.id}} data-intra={{c.intra}} data-bal={{c.bal}} data-gstin="{{c.gstin}}" {{'selected' if c.id|string==pre.party|string}}>{{c.name}}</option>{% endfor %}</select></div>
 <div><label>Supplier's bill no.</label><input name=sup_no value="{{pre.sup_no or ''}}" class="{{'fl' if pre.supplier}}" required></div>
 <div><label>Supplier's bill date</label><input name=sup_date type=date value="{{pre.sup_date or d}}" class="{{'fl' if pre.supplier}}" required></div>
+<div><label>Document type</label><select name=doctype><option value=tax>Tax invoice<option value=proforma {{'selected' if pre.doctype=='proforma'}}>Proforma (not in books)</select></div>
+<div><label>Rates are</label><select name=incl id=incl><option value=0>Without tax<option value=1 {{'selected' if pre.incl}}>Including tax</select></div>
+<div><label>Job (optional)</label><select name=job><option value="">None</option>{% for j in js %}<option value={{j.id}}>{{j.name}}: {{j.title}}</option>{% endfor %}</select></div>
 <div><label>Narration</label><input name=narration></div></div><p class=pinfo id=pinfo></p></div>
-<div class=card>{{grid(rows, names, items, 'buy', pre.supplier)}}<button>✓ Verify & save</button></form>""",
-            cs=parties("'supplier','both'", "Creditors", "cr", "dr"), pre=pre, miss=miss, rows=rows, d=today(), vn=vno("PU", "purchases", today()), names=[r["name"] for r in irows], items=imap)
-    f = request.form; lines = parse(f)
+{{extras(pre.meta or {}, '')}}<div class=card>{{grid(rows, names, items, 'buy', pre.supplier)}}<button>✓ Verify & save</button></form>""",
+            cs=parties("'supplier','both'", "Creditors", "cr", "dr"), pre=pre, miss=miss, rows=rows, d=today(), vn=vno("PU", "purchases", today()), names=[r["name"] for r in irows], items=imap,
+            js=q("select j.*, c.name from jobs j join clients c on c.id=j.client_id order by j.id desc limit 200"))
+    f = request.form; lines = parse(f); incl = f.get("incl") == "1"; proforma = f.get("doctype") == "proforma"
     p = one("select * from clients where id=?", f["party"]); sup_no = f["sup_no"].strip()
     dt.date.fromisoformat(f["sup_date"])
     if not sup_no: raise Oops("Supplier's bill number is needed")
-    if one("select 1 from purchases where party_id=? and lower(sup_no)=lower(?) and cancelled=0", p["id"], sup_no): raise Oops("This supplier bill is already entered")
-    taxable, cg, sg, ig, ro, total = tax(lines, intra(p))
+    if one("select 1 from purchases where party_id=? and lower(sup_no)=lower(?) and cancelled=0 and coalesce(doctype,'tax')=?", p["id"], sup_no, "proforma" if proforma else "tax"): raise Oops("This supplier bill is already entered")
+    rows, taxable, cg, sg, ig, ro, total = calc(lines, intra(p), incl); calc_total = total
+    if f.get("touched"): taxable, cg, sg, ig, ro, total = printed(f, p, taxable, cg, sg, ig)
     with db() as c:
-        no = vno("PU", "purchases", f["date"])
-        v = post(f["date"], [("Purchases", None, taxable, 0)] + [(a, None, x, 0) for a, x in (("Input CGST", cg), ("Input SGST", sg), ("Input IGST", ig)) if x]
-                 + ([("Round off", None, max(ro, 0), max(-ro, 0))] if ro else []) + [("Creditors", p["id"], 0, total)])
-        i = c.execute("insert into purchases(no,date,party_id,sup_no,sup_date,narration,taxable,cgst,sgst,igst,ro,total,voucher,draft_id) values(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                      (no, f["date"], p["id"], sup_no, f["sup_date"], f["narration"], taxable, cg, sg, ig, ro, total, v, f["draft"] or None)).lastrowid
-        c.executemany("insert into plines(purchase_id,descr,qty,rate,gst,hsn,unit,item_id) values(?,?,?,?,?,?,?,?)", [(i, d, qy, r, gs, h, u, iid(d)) for d, qy, r, gs, h, u in lines])
+        no = vno("PF" if proforma else "PU", "purchases", f["date"])
+        v = None if proforma else post_purchase(f["date"], p["id"], taxable, cg, sg, ig, ro, total)
+        i = c.execute("insert into purchases(no,date,party_id,sup_no,sup_date,narration,taxable,cgst,sgst,igst,ro,total,voucher,draft_id,incl,meta,due,job_id,doctype,calc_total) values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                      (no, f["date"], p["id"], sup_no, f["sup_date"], f["narration"], taxable, cg, sg, ig, ro, total, v, f["draft"] or None, int(incl), meta_of(f), f.get("due") or None, f["job"] or None, "proforma" if proforma else "tax", calc_total)).lastrowid
+        c.executemany("insert into plines(purchase_id,descr,qty,rate,gst,hsn,unit,item_id,disc,taxable,taxamt) values(?,?,?,?,?,?,?,?,?,?,?)",
+                      [(i, d, qy, r, gs, h, u, iid(d), dc, t, x) for (d, qy, r, gs, h, u, dc), (t, x) in zip(lines, rows)])
         if f["draft"]: c.execute("update drafts set status='done' where id=?", (f["draft"],))
     return redirect(f"/purchase/{i}")
 
 @app.route("/purchase/<int:i>")
 def purchase(i):
     v = one("select p.*, c.name, c.gstin, c.address from purchases p join clients c on c.id=p.party_id where p.id=?", i)
-    ls = doc_lines(q("select descr,hsn,qty,unit,rate,gst from plines where purchase_id=?", i))
+    ls = doc_lines(q("select descr,hsn,qty,unit,rate,disc,gst,taxable from plines where purchase_id=?", i))
     pays = q("select * from ppayments where purchase_id=? order by id", i); paid = sum(p["amount"] for p in pays if not p["cancelled"])
-    return page("""<div class="head np"><h1>{{v.no}} {% if v.cancelled %}<span class="pill Cancelled">Cancelled</span>{% elif v.total-paid<=0 %}<span class="pill Paid">Paid</span>{% endif %}</h1><div>
-{% if not v.cancelled %}<a class=btn href="/payment?purchase={{v.id}}">Pay supplier</a> {% endif %}<button class=ghost onclick=print()>Print</button></div></div>""" + DOC + """
-<div class="card np"><h2>Payments · To pay ₹{{(v.total-paid)|rs}}</h2>{% for p in pays %}<form method=post action=/payment/{{p.id}}/cancel style="display:flex;gap:12px;align-items:center;justify-content:space-between;padding:6px 0">
+    job = one("select title from jobs where id=?", v["job_id"]) if v["job_id"] else None
+    return page("""<div class="head np"><h1>{{v.no}} {% if v.cancelled %}<span class="pill Cancelled">Cancelled</span>{% elif v.doctype=='proforma' %}<span class="pill Proforma">Proforma</span>{% elif v.total-paid<=0 %}<span class="pill Paid">Paid</span>{% endif %}</h1><div>
+{% if not v.cancelled and v.doctype!='proforma' %}<a class=btn href="/payment?purchase={{v.id}}">Pay supplier</a> {% elif not v.cancelled %}<a class=btn href="/purchase/{{v.id}}/post">Post to books</a> {% endif %}<button class=ghost onclick=print()>Print</button></div></div>
+{% if v.doctype=='proforma' %}<div class=note>This is a proforma. It is not in your books or stock yet. When the real tax invoice arrives, press <b>Post to books</b>.</div>{% endif %}
+<div class=card><div style="display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:20px"><div><h2>Supplier</h2><b>{{v.name}}</b><br><span class=mute>{{v.gstin}}<br>{{v.address}}</span></div>
+<div class=r><h2>Purchase bill</h2><b>{{v.no}}</b><br><span class=mute>{{v.date}}<br>Supplier bill {{v.sup_no}} · {{v.sup_date}}{% if v.due %}<br>Due {{v.due}}{% endif %}{% if job %}<br>Job: {{job.title}}{% endif %}</span></div></div>
+<table><thead><tr><th>Item<th>HSN<th class=r>Qty<th class=r>Rate{{' (incl. tax)' if v.incl}}<th class=r>Disc %<th class=r>GST %<th class=r>Amount</tr></thead><tbody>
+{% for d,h,qy,u,r,dc,gs,a in ls %}<tr><td>{{d}}<td class=mute>{{h or ''}}<td class=r>{{qy}} {{u or ''}}<td class=r>{{r}}<td class=r>{{dc or ''}}<td class=r>{{gs}}<td class=r>{{a|rs}}</tr>{% endfor %}
+<tr><td colspan=6 class=r>Taxable value<td class=r>{{v.taxable|rs}}</tr>
+{% for n,x in (('CGST',v.cgst),('SGST',v.sgst),('IGST',v.igst)) if x %}<tr><td colspan=6 class=r>{{n}}<td class=r>{{x|rs}}</tr>{% endfor %}
+{% if v.ro %}<tr><td colspan=6 class=r>Round off<td class=r>{{v.ro|rs}}</tr>{% endif %}
+<tr><td colspan=6 class=r><b>Total (as printed by supplier)</b><td class=r><b>₹{{v.total|rs}}</b></tr></tbody></table>
+{% if v.calc_total and v.calc_total!=v.total %}<p class=mute>Items add up to ₹{{v.calc_total|rs}}; the supplier's printed total is used.</p>{% endif %}
+{% for k,x in meta.items() %}<p class=mute style="margin:4px 0">{{labels[k]}}: {{x}}</p>{% endfor %}{% if v.narration %}<p class=mute>Note: {{v.narration}}</p>{% endif %}</div>
+<div class="card np"><h2>Payments · To pay ₹{{(0 if v.doctype=='proforma' else v.total-paid)|rs}}</h2>{% for p in pays %}<form method=post action=/payment/{{p.id}}/cancel style="display:flex;gap:12px;align-items:center;justify-content:space-between;padding:6px 0">
 <span>{{p.date}} · {{p.mode}} · ₹{{p.amount|rs}} {% if p.cancelled %}<span class="pill Cancelled">undone</span>{% endif %}</span>{% if not p.cancelled %}<button class="ghost danger">Undo</button>{% endif %}</form>{% else %}<p class=empty>No payments yet.</p>{% endfor %}</div>
 {% if not v.cancelled %}<form class=np method=post action=/purchase/{{v.id}}/cancel onsubmit="return confirm('Cancel this bill? A reversing entry will be posted.')"><button class=danger>Cancel bill</button></form>{% endif %}""",
-        v=v, ls=ls, pays=pays, paid=paid, who="Supplier", title="Purchase bill")
+        v=v, ls=ls, pays=pays, paid=paid, job=job, meta=json.loads(v["meta"] or "{}"), labels=META)
+
+@app.route("/purchase/<int:i>/post", methods=["GET", "POST"])
+def purchase_post(i):
+    v = one("select * from purchases where id=? and doctype='proforma' and cancelled=0", i) or abort(404)
+    if request.method == "GET":
+        return page("""<div class=head><h1>Post to books</h1></div><div class=card><p class=mute>Enter the number and date of the real tax invoice. The amounts from the proforma will be used.</p><form method=post class=form>
+<div><label>Supplier's bill no.</label><input name=sup_no required></div><div><label>Supplier's bill date</label><input name=sup_date type=date value={{d}} required></div><div><label>Entry date</label><input name=date type=date value={{d}}></div><button>Post to books</button></form></div>""", d=today())
+    f = request.form; sup_no = f["sup_no"].strip(); dt.date.fromisoformat(f["sup_date"])
+    if not sup_no: raise Oops("Supplier's bill number is needed")
+    if one("select 1 from purchases where party_id=? and lower(sup_no)=lower(?) and cancelled=0 and coalesce(doctype,'tax')='tax'", v["party_id"], sup_no): raise Oops("This supplier bill is already entered")
+    with db() as c:
+        no = vno("PU", "purchases", f["date"])
+        vch = post_purchase(f["date"], v["party_id"], v["taxable"], v["cgst"], v["sgst"], v["igst"], v["ro"], v["total"])
+        c.execute("update purchases set doctype='tax', voucher=?, no=?, sup_no=?, sup_date=?, date=? where id=?", (vch, no, sup_no, f["sup_date"], f["date"], i))
+    return redirect(f"/purchase/{i}")
 
 @app.post("/purchase/<int:i>/cancel")
 def purchase_cancel(i):
@@ -510,7 +659,7 @@ def purchase_cancel(i):
         v = one("select * from purchases where id=? and cancelled=0", i)
         if not v: raise Oops("Already cancelled")
         if one("select 1 from ppayments where purchase_id=? and cancelled=0", i): raise Oops("Undo its payments first")
-        reverse(v["voucher"]); c.execute("update purchases set cancelled=1 where id=?", (i,))
+        v["voucher"] and reverse(v["voucher"]); c.execute("update purchases set cancelled=1 where id=?", (i,))
     return redirect(f"/purchase/{i}")
 
 @app.route("/drafts")
@@ -548,7 +697,7 @@ def money(kind, ptbl, col, ours):
     """Shared screen for Receipt (customers) and Payment (suppliers)."""
     view, label = ("inv_due", "Receipt") if kind == "in" else ("pur_due", "Payment")
     if request.method == "GET":
-        ds = q(f"select * from {view} where due>0 and cancelled=0 order by date")
+        ds = q(f"select * from {view} where due>0 and cancelled=0 and doctype='tax' order by coalesce(due_date, date)")
         sel = request.args.get("invoice" if kind == "in" else "purchase", "")
         return page("""<div class=head><h1>{{label}}</h1></div><div class=card><h2>{{'Money received from a customer' if kind=='in' else 'Money paid to a supplier'}}</h2>{% if ds %}<form method=post class=form>
 <div><label>Bill</label><select name=bill>{% for d in ds %}<option value={{d.id}} {{'selected' if d.id|string==sel}}>{{d.no}} · {{d.name}} · due ₹{{d.due|rs}}</option>{% endfor %}</select></div>
@@ -557,7 +706,7 @@ def money(kind, ptbl, col, ours):
             ds=ds, sel=sel, d=today(), label=label, kind=kind)
     f = request.form
     with db() as c:
-        b = one(f"select * from {view} where id=? and cancelled=0", f["bill"]); amt = paise(f["amount"])
+        b = one(f"select * from {view} where id=? and cancelled=0 and doctype='tax'", f["bill"]); amt = paise(f["amount"])
         if not b or not 0 < amt <= b["due"]: raise Oops("Amount must be above 0 and not more than the due")
         cash = ("Cash" if f["mode"] == "Cash" else "Bank", None)
         v = post(f["date"], [(*cash, amt, 0), ("Debtors", b[col], 0, amt)] if kind == "in" else [("Creditors", b[col], amt, 0), (*cash, 0, amt)])
@@ -587,10 +736,10 @@ def payment_cancel(i): return undo("ppayments", "purchase_id", "purchase")
 @app.route("/outstanding")
 def outstanding():
     return page("""<div class=head><h1>Outstanding</h1></div><div class=cols><div class=card><h2>To receive from customers · ₹{{(rec|sum(attribute='due'))|rs}}</h2><table><tbody>
-{% for r in rec %}<tr><td><a href=/invoice/{{r.id}}>{{r.no}}</a><br><span class=mute>{{r.name}} · {{r.date}}</span><td class=r><b>₹{{r.due|rs}}</b></tr>{% else %}<tr><td class=empty>Nothing pending.</tr>{% endfor %}</tbody></table></div>
+{% for r in rec %}<tr><td><a href=/invoice/{{r.id}}>{{r.no}}</a><br><span class=mute>{{r.name}} · {{r.date}}{% if r.due_date %} · due {{r.due_date}}{% endif %}</span><td class=r><b>₹{{r.due|rs}}</b></tr>{% else %}<tr><td class=empty>Nothing pending.</tr>{% endfor %}</tbody></table></div>
 <div class=card><h2>To pay suppliers · ₹{{(pay|sum(attribute='due'))|rs}}</h2><table><tbody>
-{% for r in pay %}<tr><td><a href=/purchase/{{r.id}}>{{r.no}}</a><br><span class=mute>{{r.name}} · {{r.date}}</span><td class=r><b>₹{{r.due|rs}}</b></tr>{% else %}<tr><td class=empty>Nothing pending.</tr>{% endfor %}</tbody></table></div></div>""",
-        rec=q("select * from inv_due where due>0 and cancelled=0 order by date"), pay=q("select * from pur_due where due>0 and cancelled=0 order by date"))
+{% for r in pay %}<tr><td><a href=/purchase/{{r.id}}>{{r.no}}</a><br><span class=mute>{{r.name}} · {{r.date}}{% if r.due_date %} · due {{r.due_date}}{% endif %}</span><td class=r><b>₹{{r.due|rs}}</b></tr>{% else %}<tr><td class=empty>Nothing pending.</tr>{% endfor %}</tbody></table></div></div>""",
+        rec=q("select * from inv_due where due>0 and cancelled=0 order by coalesce(due_date, date)"), pay=q("select * from pur_due where due>0 and cancelled=0 and doctype='tax' order by coalesce(due_date, date)"))
 
 @app.route("/ledger")
 def ledger():
@@ -601,6 +750,32 @@ def ledger():
 <div class=card><h2>Latest entries</h2><table><thead><tr><th>Entry<th>Date<th>Account<th class=r>Debit<th class=r>Credit</tr></thead><tbody>
 {% for e in es %}<tr><td class=mute>#{{e.voucher}}<td class=mute>{{e.date}}<td>{{e.account}}<td class=r>{{e.dr|rs if e.dr}}<td class=r>{{e.cr|rs if e.cr}}</tr>{% endfor %}</tbody></table></div>""",
         tb=tb, es=q("select * from ledger order by id desc limit 60"))
+
+# ---------- company details: printed on every tax invoice ----------
+CO = ("co_name", "co_addr", "co_gstin", "co_pan", "co_phone", "co_email", "co_bank", "co_terms", "inv_prefix", "inv_first")
+
+@app.route("/company", methods=["GET", "POST"])
+def company():
+    if request.method == "POST":
+        f = request.form; x = f["co_gstin"].strip().upper()
+        if x and not gstin_ok(x): raise Oops("GSTIN is not valid. Check every letter and digit.")
+        if f["inv_first"].strip() and (not f["inv_first"].strip().isdigit() or int(f["inv_first"]) < 1): raise Oops("The next invoice number must be a whole number, 1 or more")
+        if not re.fullmatch(r"[A-Za-z0-9]{0,6}", f["inv_prefix"].strip()): raise Oops("Invoice prefix can have only letters and digits")
+        with db() as c:
+            for k in CO: c.execute("insert or replace into settings values(?,?)", (k, (x if k == "co_gstin" else f[k]).strip()))
+            if f["inv_first"].strip():
+                t = dt.date.today(); c.execute("insert or replace into settings values('inv_first_for',?)", (f"{f['inv_prefix'].strip()}{(t.year - (t.month < 4)) % 100:02d}-",))
+        return redirect("/company")
+    return page("""<div class=head><h1>Company details</h1></div>{% if saved %}<div class=note>Printed on every tax invoice. Check each box carefully.</div>{% endif %}
+<form method=post><div class=card><h2>Printed on invoices</h2><div class=form><div><label>Company name</label><input name=co_name value="{{c.co_name}}" required></div>
+<div><label>GSTIN</label><input name=co_gstin value="{{c.co_gstin}}"></div><div><label>PAN</label><input name=co_pan value="{{c.co_pan}}"></div>
+<div><label>Phone</label><input name=co_phone value="{{c.co_phone}}"></div><div><label>Email</label><input name=co_email value="{{c.co_email}}"></div>
+<div style="grid-column:1/-1"><label>Address</label><input name=co_addr value="{{c.co_addr}}" required></div>
+<div style="grid-column:1/-1"><label>Bank details</label><textarea name=co_bank>{{c.co_bank}}</textarea></div>
+<div style="grid-column:1/-1"><label>Terms & conditions</label><textarea name=co_terms>{{c.co_terms}}</textarea></div></div></div>
+<div class=card><h2>Invoice numbering</h2><p class=mute>Bills are numbered like <b>{{c.inv_prefix or 'D'}}26-001</b>: prefix, year the financial year starts, then a counter that restarts every April. Enter the number your <b>next</b> bill should get, so it continues from your last one.</p>
+<div class=form><div><label>Prefix</label><input name=inv_prefix value="{{c.inv_prefix or 'D'}}"></div><div><label>Next invoice number</label><input name=inv_first type=number min=1 value="{{c.inv_first}}"></div></div></div>
+<button>Save company details</button></form>""", c={k: cfg(k) for k in CO}, saved=not cfg("co_name"))
 
 # ---------- inbox: everything received on Telegram ----------
 def pair_code():
